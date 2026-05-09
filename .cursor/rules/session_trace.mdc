@@ -1,0 +1,31 @@
+---
+description: Agentic session traceability. Apply during any multi-file or architectural change task.
+alwaysApply: false
+---
+
+# Workflow
+
+At the start of any task involving more than 2 files or any architectural change:
+
+1. Call `start_trace` with the full task description and the list of files you expect to touch. Store the returned `session_id` — you will need it for every subsequent call. Also note the returned `trace_file_path` so you can reference it later.
+
+2. Before each significant decision — reading a file to understand structure, choosing an implementation approach, modifying a file that other files depend on — call `append_trace`. The `reason` field must be specific. Not "modified auth.py" but "modified auth.py to replace APIKeyAuth with BearerTokenAuth because downstream clients expect a `.headers` property that the old class does not expose."
+
+3. Pass the `step_id` returned from each `append_trace` call as `parent_step_id` in the next call. This is what builds the reasoning chain. For the very first `append_trace`, pass `""` as `parent_step_id`.
+
+4. When the task is complete or you are stopping, call `end_trace` with:
+   - `outcome` set to `completed`, `partial`, or `aborted`
+   - `model` set to the model name you are running on (e.g. `claude-sonnet-4-5`)
+   - `tokens_in`, `tokens_out`, `cost_usd` if you have access to these values
+
+Do not call `append_trace` for trivial actions like reading a config file to check syntax. Call it when you are making a decision that affects other files or that a reviewer would want to understand three weeks from now.
+
+**Event type reference:**
+
+- `decision` — choosing an approach or architecture. Most important type. `reason` must be specific.
+- `file_read` — reading a file to understand structure before acting
+- `file_modify` — modifying an existing file
+- `file_create` — creating a new file
+- `file_delete` — deleting a file
+- `tool_call` — invoking an external tool (terminal, search, etc.)
+- `checkpoint` — explicit marker mid-session for long-running tasks

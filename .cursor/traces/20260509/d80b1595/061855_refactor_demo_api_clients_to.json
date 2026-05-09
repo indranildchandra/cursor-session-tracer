@@ -1,0 +1,59 @@
+{
+  "session": {
+    "session_id": "d80b1595",
+    "slug": "refactor_demo_api_clients_to",
+    "task": "Refactor demo API clients to use BearerTokenAuth instead of APIKeyAuth; update get_current_auth and clients/main accordingly.",
+    "started_at": "2026-05-09T06:18:55Z",
+    "ended_at": "2026-05-09T06:20:18Z",
+    "outcome": "completed",
+    "repo_snapshot": [
+      "demo/auth.py",
+      "demo/main.py",
+      "demo/clients/github.py",
+      "demo/clients/stripe.py"
+    ],
+    "cursor_stats": {
+      "model": "gpt-5.2",
+      "tool_call_count": 2,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cost_usd": null
+    }
+  },
+  "events": [
+    {
+      "step_id": "step_001",
+      "parent_step_id": null,
+      "type": "decision",
+      "timestamp": "2026-05-09T06:19:03Z",
+      "reason": "Switch get_current_auth() to return BearerTokenAuth so all downstream clients share the new Authorization: Bearer header pattern from demo/auth.py.",
+      "files_read": [
+        "demo/auth.py",
+        "demo/main.py",
+        "demo/clients/github.py",
+        "demo/clients/stripe.py"
+      ],
+      "files_modified": [],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_002",
+      "parent_step_id": "step_001",
+      "type": "file_modify",
+      "timestamp": "2026-05-09T06:19:34Z",
+      "reason": "Updated get_current_auth() and both demo API clients to construct BearerTokenAuth so .headers now emits Authorization: Bearer rather than X-API-Key.",
+      "files_read": [],
+      "files_modified": [
+        "demo/auth.py",
+        "demo/clients/github.py",
+        "demo/clients/stripe.py",
+        "demo/main.py"
+      ],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    }
+  ]
+}
