@@ -120,3 +120,5 @@ audit/
 docs/
 **/__pycache__/
 **.pyc
+DESIGN-PLAN.md
+

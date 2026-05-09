@@ -1,16 +1,16 @@
 """
-Stripe API client — PRE-refactor state.
-Imports and uses APIKeyAuth directly. The agent needs to change this to BearerTokenAuth.
+Stripe API client — post-refactor state.
+Uses BearerTokenAuth instead of APIKeyAuth.
 """
 
-from demo.auth import APIKeyAuth
+from demo_post_changes.auth import BearerTokenAuth
 
 STRIPE_API_BASE = "https://api.stripe.com/v1"
 
 
 class StripeClient:
     def __init__(self):
-        self.auth = APIKeyAuth()
+        self.auth = BearerTokenAuth()
         self.base_url = STRIPE_API_BASE
 
     def get_payment(self, payment_id: str) -> dict:

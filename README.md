@@ -4,6 +4,8 @@ Agentic observability for Cursor. Logs agent decisions, file touches, and reason
 
 Built for the talk **"When the Agent Drives, Who Holds the Wheel?"** — Cursor Community Meetup Mumbai, May 2026.
 
+[Talk Deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/view) · [Design Plan](DESIGN-PLAN.md) · [Demo Runbook](DEMO-RUNBOOK.md)
+
 ---
 
 ## The Problem
@@ -19,7 +21,7 @@ This is **agentic amnesia**. This tool fixes it.
 Three MCP tools integrate into Cursor's agentic loop:
 
 | Tool | When the agent calls it | What it does |
-|---|---|---|
+| --- | --- | --- |
 | `start_trace` | Beginning of any multi-file task | Creates the trace file, returns a `session_id` |
 | `append_trace` | Before each significant decision | Appends a decision event with reason, file lists, parent chain |
 | `end_trace` | Task complete or stopped | Writes `ended_at`, outcome, and Cursor usage stats |
@@ -74,7 +76,7 @@ The rule at `.cursor/rules/session_trace.mdc` tells the agent when and how to ca
 
 Traces are stored as JSON files under `.cursor/traces/`:
 
-```
+```bash
 .cursor/traces/
   20260509/
     a1b2c3d4/
@@ -147,7 +149,7 @@ python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid --max-nodes 20
 
 **Example terminal output:**
 
-```
+```bash
 SESSION a1b2c3d4 | refactor_auth_clients | started 14:32:01 | completed 15:14:32
 
 Session a1b2c3d4
@@ -169,12 +171,114 @@ Session a1b2c3d4
 ## API Endpoints
 
 | Endpoint | Description |
-|---|---|
+| --- | --- |
 | `GET /health` | Health check |
 | `GET /sessions` | List all recorded sessions as JSON |
 | `GET /docs` | FastAPI Swagger UI |
 | `* /mcp` | MCP streamable HTTP transport (Cursor 0.43+) |
 | `GET /sse` | MCP SSE transport (fallback) |
+
+---
+
+## Screenshots
+
+### Cursor agent calling the MCP tools mid-session
+
+![Cursor chat — start_trace and append_trace](demo_screenshots/cursor-chat-snap-1.png)
+
+![Cursor chat — reasoning chain forming and completion](demo_screenshots/cursor-chat-snap-2.png)
+
+### Terminal tree output (`render_trace.py`)
+
+![render_trace CLI output](demo_screenshots/render-trace-cli.png)
+
+### Trace file — what gets written to disk
+
+![Trace file summary view](demo_screenshots/trace-file-summary.png)
+
+![Trace file — detailed event steps](demo_screenshots/trace-file-detailed-steps.png)
+
+---
+
+## Running the Live Demo Yourself
+
+The repo ships with two demo app directories so you can run the full demo end-to-end without any setup beyond cloning.
+
+### What's in each directory
+
+| Directory | State | Purpose |
+| --- | --- | --- |
+| `demo/` | **Pre-refactor** — `APIKeyAuth` everywhere | Open this in Cursor as the starting point |
+| `demo_post_changes/` | **Post-refactor** — `BearerTokenAuth` everywhere | Reference: what the agent should produce |
+
+### Step-by-step
+
+**1. Clone and install**
+
+```bash
+git clone <repo-url>
+cd cursor-session-tracer
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+**2. Start the MCP server**
+
+```bash
+./run_server.sh
+# server starts on http://127.0.0.1:8080
+```
+
+**3. Open `demo/` in Cursor**
+
+```bash
+cursor .
+```
+
+Cursor will auto-load `.cursor/mcp.json` and register the tracer. Confirm the MCP server shows as connected in Cursor → Settings → MCP.
+
+**4. Give the agent this task**
+
+```text
+Refactor all API clients in this codebase to use the new BearerTokenAuth
+pattern from demo/auth.py instead of APIKeyAuth. Update demo/main.py,
+demo/clients/github.py, and demo/clients/stripe.py. Make sure the
+get_current_auth() function also returns the new auth type.
+```
+
+The agent will call `start_trace` → several `append_trace` calls → `end_trace`. Watch the trace file populate in real time:
+
+```bash
+# macOS (no watch by default)
+while true; do clear; find .cursor/traces -name '*.json' | sort; sleep 1; done
+
+# Linux / after brew install watch
+watch -n 1 "find .cursor/traces -name '*.json' | sort"
+```
+
+**5. Render the trace**
+
+```bash
+python render_trace.py --session YYYYMMDD/<session_id>
+# find the date/session_id from the path printed above
+```
+
+**6. Compare against the reference output**
+
+```bash
+# Verify the agent's changes match the expected post-refactor state
+diff <(python3 -c "import demo.auth as a; print(type(a.get_current_auth()).__name__)") \
+     <(echo "BearerTokenAuth")
+```
+
+**7. Run the tests to verify correctness**
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+# 101 tests — pre-refactor state, post-refactor state, MCP tools, renderer
+```
+
+> See [DEMO-RUNBOOK.md](DEMO-RUNBOOK.md) for the demo execution steps, fallback steps, and troubleshooting.
 
 ---
 
@@ -184,38 +288,62 @@ Session a1b2c3d4
 .venv/bin/python -m pytest tests/ -v
 ```
 
-54 tests across three files:
+101 tests across five files:
 
 | File | Coverage |
-|---|---|
+| --- | --- |
+| `tests/test_demo.py` | `demo/` pre-refactor state — `APIKeyAuth` in all clients, correct headers, HTTP endpoints |
+| `tests/test_demo_post_changes.py` | `demo_post_changes/` post-refactor state — `BearerTokenAuth` throughout, symmetry check vs pre |
 | `tests/test_file_utils.py` | Slug generation, path resolution, JSON read/write, step ID sequencing |
 | `tests/test_mcp_tools.py` | All three MCP tools, Cursor stats tracking, full session lifecycle |
 | `tests/test_render_trace.py` | Tree builder, orphan handling, Mermaid renderer, CLI smoke test |
+
+The symmetry test (`test_pre_and_post_header_keys_differ`) acts as a canary: if `demo/` is accidentally left in the post-refactor state before a talk, the test fails immediately.
 
 ---
 
 ## Project Structure
 
-```
+```text
 cursor-session-tracer/
 ├── src/
-│   ├── file_utils.py       # slug gen, path resolver, JSON read/write
-│   ├── mcp_server.py       # FastMCP — start_trace, append_trace, end_trace
-│   └── app.py              # FastAPI app, mounts MCP, exposes /sessions
-├── demo/                   # small FastAPI demo app (target for live demo)
-│   ├── auth.py             # APIKeyAuth → BearerTokenAuth refactor target
-│   └── clients/            # github.py, stripe.py
+│   ├── file_utils.py            # slug gen, path resolver, JSON read/write
+│   ├── mcp_server.py            # FastMCP — start_trace, append_trace, end_trace
+│   └── app.py                   # FastAPI app, mounts MCP, exposes /sessions
+├── demo/                        # PRE-refactor demo app — open this in Cursor
+│   ├── auth.py                  # get_current_auth() returns APIKeyAuth ← agent changes this
+│   ├── main.py
+│   └── clients/
+│       ├── github.py            # uses APIKeyAuth ← agent changes this
+│       └── stripe.py            # uses APIKeyAuth ← agent changes this
+├── demo_post_changes/           # POST-refactor reference — expected end state
+│   ├── auth.py                  # get_current_auth() returns BearerTokenAuth
+│   ├── main.py
+│   └── clients/
+│       ├── github.py            # uses BearerTokenAuth
+│       └── stripe.py            # uses BearerTokenAuth
 ├── tests/
+│   ├── test_demo.py             # asserts demo/ is correct pre-refactor state
+│   ├── test_demo_post_changes.py# asserts demo_post_changes/ is correct post-refactor state
 │   ├── test_file_utils.py
 │   ├── test_mcp_tools.py
 │   └── test_render_trace.py
-├── render_trace.py         # terminal tree + Mermaid renderer
+├── render_trace.py              # terminal tree + Mermaid renderer
 ├── .cursor/
-│   ├── mcp.json            # Cursor MCP registration (auto-loaded)
-│   └── rules/
-│       └── session_trace.mdc  # Cursor rule — tells agent when to trace
-├── DEMO-RUNBOOK.md         # step-by-step demo guide for the talk
-├── DESIGN-PLAN.md          # full architecture and talk design document
+│   ├── mcp.json                 # Cursor MCP registration (auto-loaded)
+│   ├── rules/
+│   │   └── session_trace.mdc   # Cursor rule — tells agent when to trace
+│   └── traces/                  # auto-generated at runtime — gitignored
+│       └── 20260509/            # date of session (YYYYMMDD)
+│           └── d80b1595/        # session_id (uuid4[:8])
+│               └── 061855_refactor_demo_api_clients_to.json  # HHMMSS_<slug>.json
+├── demo_screenshots/            # screenshots from a live demo run
+│   ├── cursor-chat-snap-1.png   # agent calling start_trace in Cursor chat
+│   ├── cursor-chat-snap-2.png   # agent calling append_trace mid-session
+│   ├── render-trace-cli.png     # render_trace.py terminal tree output
+│   ├── trace-file-summary.png   # trace JSON — session header view
+│   └── trace-file-detailed-steps.png  # trace JSON — events array view
+├── DEMO-RUNBOOK.md              # step-by-step demo guide for the talk
 ├── requirements.txt
 └── run_server.sh
 ```

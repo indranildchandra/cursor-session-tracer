@@ -1,14 +1,13 @@
 """
-Auth module — PRE-refactor state using APIKeyAuth.
-This is the STARTING POINT for the live demo.
-The agent's task is to refactor get_current_auth() and all clients to use BearerTokenAuth.
+Auth module — post-refactor state using BearerTokenAuth throughout.
+This is what demo/auth.py looks like AFTER the agent runs the refactoring task.
 """
 
 import os
 
 
 class APIKeyAuth:
-    """Legacy auth using X-API-Key header."""
+    """Legacy auth using X-API-Key header. Kept for reference only."""
 
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("API_KEY", "demo-key-12345")
@@ -35,6 +34,5 @@ class BearerTokenAuth:
         return bool(self.token)
 
 
-def get_current_auth() -> APIKeyAuth:
-    """Returns APIKeyAuth — this is what the agent needs to change to BearerTokenAuth."""
-    return APIKeyAuth()
+def get_current_auth() -> BearerTokenAuth:
+    return BearerTokenAuth()

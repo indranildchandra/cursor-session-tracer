@@ -1,18 +1,18 @@
 """
-Demo app — PRE-refactor state. This is the STARTING POINT for the live demo.
-Has a clear architectural seam: all API clients use the old APIKeyAuth pattern.
-The agent's task: refactor everything to use BearerTokenAuth from demo/auth.py.
+Demo app — post-refactor state.
+All API clients now use BearerTokenAuth. This is what the app looks like
+AFTER the agent completes the refactoring task shown in the live demo.
 """
 
 from fastapi import FastAPI, HTTPException
 
-from demo.auth import APIKeyAuth, get_current_auth
-from demo.clients.github import GitHubClient
-from demo.clients.stripe import StripeClient
+from demo_post_changes.auth import get_current_auth
+from demo_post_changes.clients.github import GitHubClient
+from demo_post_changes.clients.stripe import StripeClient
 
 app = FastAPI(
-    title="Demo App (Pre-Refactor)",
-    description="Target repo for cursor-session-tracer live demo — APIKeyAuth throughout",
+    title="Demo App (Post-Refactor)",
+    description="Target repo after cursor-session-tracer live demo — BearerTokenAuth throughout",
 )
 
 github = GitHubClient()

@@ -5,6 +5,8 @@
 **Talk + Build Design Document**
 Indranil Chandra | Cursor Community Meetup Mumbai | May 2026
 
+[Talk Deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/view)
+
 ---
 
 ## 1. Event and Audience Context
@@ -13,7 +15,6 @@ Indranil Chandra | Cursor Community Meetup Mumbai | May 2026
 
 - Cursor Community Meetup Mumbai -- second edition, official Cursor community event
 - Format: talks + demos from power users, Q&A with Cursor team member, open networking
-- Slot: 20 minutes -- talk + live demo
 
 ### 1.2 Audience Profile
 
@@ -63,9 +64,7 @@ Teams that instrument their agentic workflows now will have an audit-ready, revi
 
 ---
 
-## 3. Talk Structure -- 20 Minutes
-
-> Each segment has a hard time cap. Do not overrun the framing into the demo. The demo is the credibility.
+## 3. Talk Structure
 
 ### Minutes 0 to 3: The Failure Scenario
 
@@ -152,7 +151,7 @@ Close: the gap between AI-assisted development and AI-owned development is obser
 
 ### 4.2 Session Header Block
 
-Written once by `start_trace`. `ended_at` and `outcome` are null until `end_trace` is called.
+Written once by `start_trace`. `ended_at`, `outcome`, and all `cursor_stats` fields (except `tool_call_count`) are null until `end_trace` is called. `tool_call_count` is auto-incremented on every `append_trace` call.
 
 ```json
 {
@@ -163,7 +162,14 @@ Written once by `start_trace`. `ended_at` and `outcome` are null until `end_trac
     "started_at": "2026-05-09T14:32:01Z",
     "ended_at": null,
     "outcome": null,
-    "repo_snapshot": ["src/auth.py", "src/clients/github.py", "src/middleware.py"]
+    "repo_snapshot": ["src/auth.py", "src/clients/github.py", "src/middleware.py"],
+    "cursor_stats": {
+      "model": null,
+      "tool_call_count": 0,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cost_usd": null
+    }
   },
   "events": []
 }
@@ -246,7 +252,8 @@ append_trace(
   files_modified: list[str],
   files_created: list[str],
   files_deleted: list[str],
-  parent_step_id: str
+  parent_step_id: str,
+  notes: str = ""          # optional free-text annotation
 ) -> dict
 ```
 
@@ -261,14 +268,22 @@ append_trace(
 - Resolves the trace file path from `session_id` by scanning `.cursor/traces/**/<session_id>/` for the most recent JSON file
 - Generates `step_id`: `'step_'` + zero-padded integer, incrementing from last event in file
 - Appends the new event object to the `events` array in the JSON file
+- Auto-increments `cursor_stats.tool_call_count` in the session header on every call
 - Returns the new `step_id` so the agent can pass it as `parent_step_id` on the next call
 
-**Agent instruction:** Agent must pass the `step_id` returned from each `append_trace` call as `parent_step_id` in the next call. This is what builds the reasoning chain.
+**Agent instruction:** Agent must pass the `step_id` returned from each `append_trace` call as `parent_step_id` in the next call. For the very first call, pass `""` as `parent_step_id`. This is what builds the reasoning chain.
 
 ### 5.3 end_trace
 
 ```text
-end_trace(session_id: str, outcome: str) -> dict
+end_trace(
+  session_id: str,
+  outcome: str,
+  model: str = "",         # e.g. "claude-sonnet-4-5"
+  tokens_in: int = 0,
+  tokens_out: int = 0,
+  cost_usd: float = 0.0
+) -> dict
 ```
 
 **Returns:**
@@ -281,7 +296,8 @@ end_trace(session_id: str, outcome: str) -> dict
 
 - Resolves trace file path from `session_id`
 - Writes `ended_at` (ISO timestamp) and `outcome` to the session header block
-- Outcome values: `completed`, `partial`, `aborted`
+- Outcome values: `completed`, `partial`, `aborted` — raises `ValueError` for any other value
+- Populates `cursor_stats` fields (`model`, `tokens_in`, `tokens_out`, `cost_usd`) if non-zero values are passed
 - Returns final trace file path
 
 ---
@@ -303,19 +319,59 @@ alwaysApply: false
 
 At the start of any task involving more than 2 files or any architectural change:
 
-1. Call `start_trace` with the full task description and the list of files you expect to touch. Store the returned `session_id` -- you will need it for every subsequent call.
+1. Call `start_trace` with the full task description and the list of files you expect to touch. Store the returned `session_id` and `trace_file_path` — you will need them for every subsequent call.
 
-2. Before each significant decision -- reading a file to understand structure, choosing an implementation approach, modifying a file that other files depend on -- call `append_trace`. The `reason` field must be specific. Not "modified auth.py" but "modified auth.py to replace APIKeyAuth with BearerTokenAuth because downstream clients expect a `.headers` property that the old class does not expose."
+2. Before each significant decision — reading a file to understand structure, choosing an implementation approach, modifying a file that other files depend on — call `append_trace`. The `reason` field must be specific. Not "modified auth.py" but "modified auth.py to replace APIKeyAuth with BearerTokenAuth because downstream clients expect a `.headers` property that the old class does not expose."
 
-3. Pass the `step_id` returned from each `append_trace` call as `parent_step_id` in the next call. This is what builds the reasoning chain.
+3. Pass the `step_id` returned from each `append_trace` call as `parent_step_id` in the next call. For the very first call, pass `""`. This is what builds the reasoning chain.
 
-4. When the task is complete or you are stopping, call `end_trace` with outcome set to `completed`, `partial`, or `aborted`.
+4. When the task is complete or you are stopping, call `end_trace` with:
+   - `outcome` set to `completed`, `partial`, or `aborted`
+   - `model` set to the model name (e.g. `claude-sonnet-4-5`)
+   - `tokens_in`, `tokens_out`, `cost_usd` if available
 
 Do not call `append_trace` for trivial actions like reading a config file to check syntax. Call it when you are making a decision that affects other files or that a reviewer would want to understand three weeks from now.
 
 ---
 
-## 7. Terminal Renderer
+## 7. FastAPI Server
+
+The MCP tools are served via a FastAPI application (`src/app.py`) that mounts the FastMCP server. Cursor connects to this server over HTTP.
+
+### 7.1 Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Health check — returns `{"status": "ok"}` |
+| `/sessions` | GET | Lists all recorded sessions from `.cursor/traces/` as JSON |
+| `/docs` | GET | FastAPI auto-generated Swagger UI |
+| `/mcp` | `*` | MCP streamable HTTP transport — primary Cursor connection point (Cursor 0.43+) |
+| `/sse` | GET | MCP SSE transport — fallback for older Cursor versions |
+| `/messages/` | POST | MCP SSE message handler (used by SSE transport) |
+
+### 7.2 Transport Notes
+
+- **Streamable HTTP** (`/mcp`): recommended. Cursor 0.43+. Config: `"url": "http://127.0.0.1:8080/mcp"`
+- **SSE** (`/sse`): fallback for older clients. Config: `"url": "http://127.0.0.1:8080/sse"`
+- Routes (`/health`, `/sessions`) must be registered **before** `app.mount("/", sse_app)` because Starlette evaluates routes in registration order and `Mount("/")` is a catch-all.
+
+### 7.3 Cursor Registration
+
+Cursor reads `.cursor/mcp.json` automatically when the project is opened. The file is committed to the repo:
+
+```json
+{
+  "mcpServers": {
+    "cursor-session-tracer": {
+      "url": "http://127.0.0.1:8080/mcp"
+    }
+  }
+}
+```
+
+---
+
+## 8. Terminal Renderer
 
 ### 7.1 Invocation
 
@@ -360,14 +416,18 @@ step_001 [decision]  14:32:18
 
 If an event references a `parent_step_id` that does not exist in the file (agent skipped a call), attach the orphaned node to the session root and prefix its label with `[ORPHAN]` in the terminal output. Do not crash. Do not silently discard.
 
-### 7.5 Flags
+### 8.5 Flags
 
-- `--verbose` -- print full reason text without truncation
-- `--files-only` -- print only the file touch summary, omit reason text. Useful for quick diff review.
+| Flag | Description |
+|---|---|
+| `--verbose` | Print full reason text without truncation (default: truncated at 120 chars) |
+| `--files-only` | Print only file touch summary, omit reason text. Useful for quick diff review. |
+| `--mode mermaid` | Output a Mermaid flowchart instead of a terminal tree. Saved to `diagram.mermaid` in the session directory. |
+| `--max-nodes N` | Cap Mermaid diagram at N nodes. Appends a truncation note. Use for sessions with 20+ events. |
 
 ---
 
-## 8. Build Order
+## 9. Build Order
 
 **Step 1: JSON schema and file writer utility**
 Write the file path resolver, slug generator, and the read/write/append utilities as standalone functions before touching MCP. Everything depends on these being correct. Test them with a hardcoded input before moving on.
@@ -375,55 +435,61 @@ Write the file path resolver, slug generator, and the read/write/append utilitie
 **Step 2: MCP server with three tools**
 Use FastMCP to cut boilerplate. Implement `start_trace`, `append_trace`, `end_trace` in that order. Wire each one to the file utilities from step 1. Test each tool in isolation with a Python test script that calls the functions directly -- do not test through Cursor until all three are working.
 
-**Step 3: Cursor rule file**
+**Step 3: FastAPI server**
+Mount the FastMCP server onto a FastAPI app (`src/app.py`). Expose `/health` and `/sessions` routes. Register MCP streamable HTTP at `/mcp` and SSE fallback at `/`. Commit `.cursor/mcp.json` to the repo.
+
+**Step 4: Cursor rule file**
 Write `.cursor/rules/session_trace.mdc` with the frontmatter and rule body from section 6. Test that Cursor picks it up by opening a new chat and checking the rule appears in context.
 
-**Step 4: End-to-end test run on dummy repo**
-Create or clone a small repo (Flask or FastAPI, 6 to 10 files). Give the agent a real multi-file task. Watch the JSON file populate in real time. Check: are the `parent_step_id` chains forming correctly? Is the `reason` field specific or generic? Are file lists accurate? Fix schema gaps before building the renderer.
+**Step 5: End-to-end test run on demo repo**
+Use the bundled FastAPI demo app (`demo/`), which has a clear architectural seam: GitHub and Stripe API clients using `APIKeyAuth`. Give the agent a real multi-file refactoring task. Watch the JSON file populate in real time. Check: are the `parent_step_id` chains forming correctly? Is the `reason` field specific or generic? Fix schema gaps before building the renderer.
 
-**Step 5: Terminal renderer**
-Implement `render_trace.py` with the tree walk, truncation, orphan handling, and the two flags. Test against the JSON file generated in step 4.
+**Step 6: Terminal renderer**
+Implement `render_trace.py` with the tree walk, truncation, orphan handling, and all flags. Test against the JSON file generated in step 5.
 
-**Step 6: Talk structure and framing slides**
-Using slides as visual anchors.
+**Step 7: Mermaid renderer**
+Add `--mode mermaid` to `render_trace.py`. Handle orphan attachment, label truncation, and the `--max-nodes` cap. *(Implemented — not a stretch goal.)*
+
+**Step 8: Talk structure and framing slides**
+See the [talk deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/edit?usp=sharing).
 
 - Slide 1: The failure scenario -- text only, large font, one sentence
 - Slide 2: The four question types -- git history / step debugger / unit test / agentic trace -- as a simple two-column comparison
 - Slide 3: The data model -- session > events > files, with parent_step_id arrows
 - Slide 4: The org-level vision -- JSON today, graph DB at scale, what questions it enables
 
-**Step 7 (stretch): Mermaid renderer**
-Only if steps 1 through 6 are complete. See section 9 for caveats before starting.
-
 ---
 
-## 9. Mermaid Renderer -- Parked, Stretch Goal Only
+## 10. Mermaid Renderer
 
-> Do not start this unless steps 1 through 6 are complete and you have at least 45 uninterrupted minutes remaining.
-
-### 9.1 What It Would Do
-
-A second mode on `render_trace.py` that walks the same parent-child tree and outputs a `.mermaid` file into the session directory.
+Implemented as `--mode mermaid` on `render_trace.py`. Not a stretch goal — shipped as part of the core implementation.
 
 ```bash
 python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid
+python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid --max-nodes 20
 ```
 
-### 9.2 Known Caveats -- Must Handle Before Using
+### 10.1 Implemented Behaviour
 
-- **Orphan nodes:** renderer must attach orphans to the root node or the diagram has disconnected floating nodes
-- **Label length:** reason text must be truncated to 50 characters and quotes/brackets must be escaped or the diagram breaks silently
-- **Large sessions:** sessions with 20+ events produce unreadable diagrams. Add a `--max-nodes` flag that caps rendering and appends a truncation note.
+- Outputs a Mermaid `flowchart TD` diagram saved to `diagram.mermaid` in the session directory (PR-attachment ready)
+- In restart scenarios (multiple JSON files under same session_id), merges all events before rendering
+- Different Mermaid node shapes per event type: `decision` → quoted rectangle, `tool_call` → double-braces, `checkpoint` → stadium, etc.
 
-### 9.3 Primary Value
+### 10.2 Edge Cases Handled
 
-The Mermaid output is a PR attachment, not a debugging tool. Its audience is the code reviewer, not the incident responder. Keep it structurally simple: decision flow and file touch points only.
+- **Orphan nodes:** attached to the root `ROOT` node rather than floating disconnected
+- **Label length:** reason truncated to 50 chars; `"` → `'`, `[`/`]` → `(`/`)` to prevent Mermaid parse errors
+- **Large sessions:** `--max-nodes N` caps node count and appends a `TRUNCATED` node
+
+### 10.3 Primary Value
+
+PR attachment, not a debugging tool. Audience is the code reviewer, not the incident responder.
 
 ---
 
-## 10. Future Architecture Notes
+## 11. Future Architecture Notes
 
-### 10.1 GraphDB Migration Path
+### 11.1 GraphDB Migration Path
 
 The JSON schema is deliberately graph-shaped. Migrating to Neo4j requires:
 
@@ -431,11 +497,11 @@ The JSON schema is deliberately graph-shaped. Migrating to Neo4j requires:
 - A Cypher schema: `(Step)-[:CAUSED]->(Step)`, `(Step)-[:TOUCHED]->(File)`
 - A query layer for cross-session analysis
 
-### 10.2 Agentic Debt as a Metric
+### 11.2 Agentic Debt as a Metric
 
 Once trace data accumulates across an engineering team, agentic debt becomes measurable: sessions where the agent completed the task but the reasoning chain contains orphaned decisions, skipped checkpoints, or decisions that touched files not in the original scope. Leading indicator of future maintenance cost.
 
-### 10.3 Integration Points
+### 11.3 Integration Points
 
 - CI pipeline: attach the trace file to the PR automatically as a comment
 - Code review tooling: surface the decision chain inline next to the diff
