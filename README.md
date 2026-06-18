@@ -99,8 +99,7 @@ Traces are stored as JSON files under `.cursor/traces/`:
       "model": "claude-sonnet-4-5",
       "tool_call_count": 6,
       "tokens_in": 15000,
-      "tokens_out": 4200,
-      "cost_usd": 0.0621
+      "tokens_out": 4200
     }
   },
   "events": [...]
@@ -355,7 +354,7 @@ cursor-session-tracer/
 Cursor usage stats are captured automatically per session and stored in the trace:
 
 - `tool_call_count` — auto-incremented on every `append_trace` call
-- `model`, `tokens_in`, `tokens_out`, `cost_usd` — passed optionally via `end_trace`
+- `model`, `tokens_in`, `tokens_out` — required at `end_trace` (cost is derivable from model + token counts)
 
 This makes **agentic debt measurable**: sessions where the agent completed a task but left orphaned decisions, skipped checkpoints, or ran significantly over token budget are leading indicators of future maintenance cost.
 

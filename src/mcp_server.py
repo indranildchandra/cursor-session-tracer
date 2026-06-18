@@ -5,12 +5,15 @@ Three tools: start_trace, append_trace, end_trace.
 Served via FastMCP mounted onto a FastAPI app (streamable HTTP transport).
 
 Cursor usage stats are captured automatically per session:
+  - model: read from Cursor's local SQLite DB at session start
   - tool_call_count: incremented on every append_trace call
-  - model, tokens_in, tokens_out, cost_usd: optional, set via end_trace
+  - tokens_in / tokens_out: summed from Cursor's SQLite DB at end_trace
+  - model per event: re-read at each append_trace; logged when it differs from session model
 """
 
 from mcp.server.fastmcp import FastMCP
 
+from src.cursor_db import get_active_composer, get_model_for_composer, get_token_counts
 from src.file_utils import (
     build_trace_path,
     generate_session_id,
@@ -41,12 +44,14 @@ mcp = FastMCP(
     description=(
         "Start a new agentic session trace. Call this at the beginning of any task "
         "touching more than 2 files or involving architectural changes. "
-        "Store the returned session_id — you need it for every subsequent call."
+        "Store the returned session_id — you need it for every subsequent call. "
+        "Model name and Cursor session ID are captured automatically from Cursor's local DB."
     )
 )
 def start_trace(task_description: str, files_in_scope: list[str]) -> dict:
     """
     Creates the trace file and writes the session header.
+    Model and composer_id are auto-detected from Cursor's SQLite DB.
 
     Args:
         task_description: Full description of the task being performed.
@@ -61,21 +66,28 @@ def start_trace(task_description: str, files_in_scope: list[str]) -> dict:
     time_prefix = get_time_prefix()
     trace_path = build_trace_path(date_dir, session_id, slug, time_prefix)
 
+    # Auto-detect model and Cursor composer session from local SQLite DB
+    composer = get_active_composer()
+    composer_id = composer["composer_id"] if composer else None
+    model = composer["model"] if composer else None
+
+    started_at = now_iso()
+
     data = {
         "session": {
             "session_id": session_id,
             "slug": slug,
             "task": task_description,
-            "started_at": now_iso(),
+            "started_at": started_at,
             "ended_at": None,
             "outcome": None,
             "repo_snapshot": files_in_scope,
             "cursor_stats": {
-                "model": None,
+                "composer_id": composer_id,
+                "model": model,
                 "tool_call_count": 0,
                 "tokens_in": None,
                 "tokens_out": None,
-                "cost_usd": None,
             },
         },
         "events": [],
@@ -95,7 +107,8 @@ def start_trace(task_description: str, files_in_scope: list[str]) -> dict:
         "Call this before each significant decision — reading a file to understand "
         "structure, choosing an implementation approach, modifying a file that other "
         "files depend on. The reason field must be specific, not generic. "
-        "Pass the returned step_id as parent_step_id in your next call."
+        "Pass the returned step_id as parent_step_id in your next call. "
+        "Model is auto-detected per event; mid-session model switches are logged automatically."
     )
 )
 def append_trace(
@@ -132,6 +145,11 @@ def append_trace(
 
     step_id = next_step_id(data["events"])
 
+    # Auto-detect model for this event; flag if it differs from session-start model
+    composer_id = data["session"]["cursor_stats"].get("composer_id")
+    session_model = data["session"]["cursor_stats"].get("model")
+    event_model = get_model_for_composer(composer_id) if composer_id else None
+
     event = {
         "step_id": step_id,
         "parent_step_id": parent_step_id or None,
@@ -144,6 +162,10 @@ def append_trace(
         "files_deleted": files_deleted,
         "notes": notes,
     }
+
+    # Only add model to event when it differs from session model (mid-session switch)
+    if event_model and event_model != session_model:
+        event["model_override"] = event_model
 
     data["events"].append(event)
 
@@ -159,31 +181,23 @@ def append_trace(
     description=(
         "End the session trace. Call this when the task is complete or you are stopping. "
         "Outcome must be one of: completed, partial, aborted. "
-        "Optionally pass Cursor usage stats (model, tokens_in, tokens_out, cost_usd) "
-        "if you have them — these are stored in the trace for observability."
+        "Token counts and model are captured automatically from Cursor's local DB — "
+        "you do not need to pass them."
     )
 )
 def end_trace(
     session_id: str,
     outcome: str,
-    model: str = "",
-    tokens_in: int = 0,
-    tokens_out: int = 0,
-    cost_usd: float = 0.0,
 ) -> dict:
     """
-    Finalises the session trace.
+    Finalises the session trace. Token counts are auto-read from Cursor's SQLite DB.
 
     Args:
         session_id: Returned by start_trace.
         outcome: One of completed, partial, aborted.
-        model: (optional) Model used in this Cursor session, e.g. claude-sonnet-4-5.
-        tokens_in: (optional) Input tokens consumed in the session.
-        tokens_out: (optional) Output tokens generated in the session.
-        cost_usd: (optional) Estimated cost in USD for the session.
 
     Returns:
-        {"trace_file_path": str}
+        {"trace_file_path": str, "tokens_in": int, "tokens_out": int}
     """
     valid_outcomes = {"completed", "partial", "aborted"}
     if outcome not in valid_outcomes:
@@ -195,17 +209,20 @@ def end_trace(
     data["session"]["ended_at"] = now_iso()
     data["session"]["outcome"] = outcome
 
-    # Populate cursor usage stats if provided
+    # Auto-compute token counts from Cursor's DB for this session window
     stats = data["session"]["cursor_stats"]
-    if model:
-        stats["model"] = model
-    if tokens_in:
-        stats["tokens_in"] = tokens_in
-    if tokens_out:
-        stats["tokens_out"] = tokens_out
-    if cost_usd:
-        stats["cost_usd"] = cost_usd
+    composer_id = stats.get("composer_id")
+    started_at = data["session"]["started_at"]
+
+    if composer_id:
+        counts = get_token_counts(composer_id, started_at)
+        stats["tokens_in"] = counts["tokens_in"]
+        stats["tokens_out"] = counts["tokens_out"]
 
     write_trace(trace_path, data)
 
-    return {"trace_file_path": str(trace_path)}
+    return {
+        "trace_file_path": str(trace_path),
+        "tokens_in": stats.get("tokens_in"),
+        "tokens_out": stats.get("tokens_out"),
+    }

@@ -1,6 +1,11 @@
 """
 Unit tests for MCP tool functions in src/mcp_server.py.
 Tests call the underlying Python functions directly — no HTTP, no Cursor.
+
+cursor_db is monkeypatched throughout:
+  - get_active_composer  → returns a fake composer_id + model
+  - get_model_for_composer → returns the same model (no mid-session switch)
+  - get_token_counts     → returns fake token counts
 """
 
 import json
@@ -12,17 +17,20 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.file_utils as fu
+import src.mcp_server as ms
 from src.mcp_server import append_trace, end_trace, start_trace
+
+FAKE_COMPOSER = {"composer_id": "abc12345-fake", "model": "claude-sonnet-4-6"}
+FAKE_TOKENS = {"tokens_in": 12000, "tokens_out": 3500}
 
 
 @pytest.fixture(autouse=True)
-def patch_traces_root(tmp_path, monkeypatch):
-    """Redirect all trace I/O to a temp directory."""
+def patch_all(tmp_path, monkeypatch):
+    """Redirect trace I/O to a temp dir and stub out all cursor_db calls."""
     monkeypatch.setattr(fu, "TRACES_ROOT", tmp_path / ".cursor" / "traces")
-    # Also patch the reference inside mcp_server (it imported from file_utils at load time)
-    import src.mcp_server as ms
-    # mcp_server calls file_utils functions which read TRACES_ROOT at call time — no extra patching needed
-    return tmp_path
+    monkeypatch.setattr(ms, "get_active_composer", lambda: FAKE_COMPOSER)
+    monkeypatch.setattr(ms, "get_model_for_composer", lambda cid: FAKE_COMPOSER["model"])
+    monkeypatch.setattr(ms, "get_token_counts", lambda cid, since: FAKE_TOKENS)
 
 
 # ---------------------------------------------------------------------------
@@ -40,16 +48,15 @@ def test_start_trace_returns_session_id_and_path():
     assert result["trace_file_path"].endswith(".json")
 
 
-def test_start_trace_creates_json_file(tmp_path):
+def test_start_trace_creates_json_file():
     result = start_trace(
         task_description="Add logging to the payment service",
         files_in_scope=["src/payment.py"],
     )
-    trace_path = Path(result["trace_file_path"])
-    assert trace_path.exists()
+    assert Path(result["trace_file_path"]).exists()
 
 
-def test_start_trace_json_structure(tmp_path):
+def test_start_trace_json_structure():
     result = start_trace(
         task_description="Fix bug in auth middleware",
         files_in_scope=["src/middleware.py", "src/auth.py"],
@@ -64,18 +71,29 @@ def test_start_trace_json_structure(tmp_path):
     assert data["events"] == []
 
 
-def test_start_trace_cursor_stats_initialized():
+def test_start_trace_cursor_stats_auto_populated():
     result = start_trace("Test task", [])
     data = json.loads(Path(result["trace_file_path"]).read_text())
     stats = data["session"]["cursor_stats"]
     assert stats["tool_call_count"] == 0
-    assert stats["model"] is None
-    assert stats["tokens_in"] is None
+    assert stats["model"] == "claude-sonnet-4-6"
+    assert stats["composer_id"] == "abc12345-fake"
+    assert stats["tokens_in"] is None  # populated at end_trace
 
 
 def test_start_trace_slug_in_filename():
     result = start_trace("Migrate database schema to postgres", ["db/schema.sql"])
     assert "migrate_database_schema_to_postgres" in result["trace_file_path"]
+
+
+def test_start_trace_no_cursor_db(monkeypatch):
+    """If cursor_db is unavailable, model and composer_id fall back to None gracefully."""
+    monkeypatch.setattr(ms, "get_active_composer", lambda: None)
+    result = start_trace("Task with no DB", [])
+    data = json.loads(Path(result["trace_file_path"]).read_text())
+    stats = data["session"]["cursor_stats"]
+    assert stats["model"] is None
+    assert stats["composer_id"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +183,32 @@ def test_append_trace_increments_tool_call_count(active_session):
     assert data["session"]["cursor_stats"]["tool_call_count"] == 3
 
 
+def test_append_trace_model_override_logged_on_switch(active_session, monkeypatch):
+    """When model changes mid-session, the event gets a model_override field."""
+    monkeypatch.setattr(ms, "get_model_for_composer", lambda cid: "claude-opus-4-6")
+    sid = active_session["session_id"]
+    append_trace(
+        session_id=sid, type="decision", reason="Mid-session model switch",
+        files_read=[], files_modified=[], files_created=[], files_deleted=[],
+        parent_step_id="",
+    )
+    data = json.loads(Path(active_session["trace_file_path"]).read_text())
+    event = data["events"][0]
+    assert event.get("model_override") == "claude-opus-4-6"
+
+
+def test_append_trace_no_model_override_when_same(active_session):
+    """When model is unchanged, no model_override field is written."""
+    sid = active_session["session_id"]
+    append_trace(
+        session_id=sid, type="decision", reason="Same model throughout",
+        files_read=[], files_modified=[], files_created=[], files_deleted=[],
+        parent_step_id="",
+    )
+    data = json.loads(Path(active_session["trace_file_path"]).read_text())
+    assert "model_override" not in data["events"][0]
+
+
 def test_append_trace_unknown_session_raises():
     with pytest.raises(FileNotFoundError):
         append_trace(
@@ -192,22 +236,26 @@ def test_end_trace_returns_trace_file_path(active_session):
     assert result["trace_file_path"].endswith(".json")
 
 
-def test_end_trace_populates_cursor_stats(active_session):
+def test_end_trace_auto_populates_tokens(active_session):
     sid = active_session["session_id"]
-    end_trace(
-        session_id=sid,
-        outcome="completed",
-        model="claude-sonnet-4-5",
-        tokens_in=15000,
-        tokens_out=4200,
-        cost_usd=0.0621,
-    )
+    result = end_trace(session_id=sid, outcome="completed")
     data = json.loads(Path(active_session["trace_file_path"]).read_text())
     stats = data["session"]["cursor_stats"]
-    assert stats["model"] == "claude-sonnet-4-5"
-    assert stats["tokens_in"] == 15000
-    assert stats["tokens_out"] == 4200
-    assert abs(stats["cost_usd"] - 0.0621) < 0.0001
+    assert stats["tokens_in"] == FAKE_TOKENS["tokens_in"]
+    assert stats["tokens_out"] == FAKE_TOKENS["tokens_out"]
+    assert result["tokens_in"] == FAKE_TOKENS["tokens_in"]
+    assert result["tokens_out"] == FAKE_TOKENS["tokens_out"]
+
+
+def test_end_trace_tokens_null_when_no_composer(monkeypatch):
+    """If cursor_db returned no composer_id, tokens stay None."""
+    monkeypatch.setattr(ms, "get_active_composer", lambda: None)
+    sess = start_trace("No DB task", [])
+    end_trace(session_id=sess["session_id"], outcome="aborted")
+    data = json.loads(Path(sess["trace_file_path"]).read_text())
+    stats = data["session"]["cursor_stats"]
+    assert stats["tokens_in"] is None
+    assert stats["tokens_out"] is None
 
 
 def test_end_trace_invalid_outcome_raises(active_session):
@@ -225,7 +273,7 @@ def test_end_trace_unknown_session_raises():
 # ---------------------------------------------------------------------------
 
 def test_full_session_lifecycle():
-    """start → append x3 → end → verify JSON."""
+    """start → append x3 → end → verify JSON including auto token counts."""
     r0 = start_trace(
         task_description="Migrate database schema to use UUIDs",
         files_in_scope=["db/schema.sql", "src/models.py", "src/migrations/001.py"],
@@ -244,22 +292,21 @@ def test_full_session_lifecycle():
         files_read=["src/models.py"], files_modified=["src/models.py"], files_created=[], files_deleted=[],
         parent_step_id=r1["step_id"],
     )
-    r3 = append_trace(
+    append_trace(
         session_id=sid, type="file_create",
         reason="Creating migration 002.py to ALTER TABLE users and backfill UUID values.",
         files_read=[], files_modified=[], files_created=["src/migrations/002.py"], files_deleted=[],
         parent_step_id=r2["step_id"],
     )
 
-    end_result = end_trace(
-        session_id=sid, outcome="completed",
-        model="claude-opus-4-6", tokens_in=22000, tokens_out=8100, cost_usd=0.2431,
-    )
+    end_result = end_trace(session_id=sid, outcome="completed")
 
     data = json.loads(Path(end_result["trace_file_path"]).read_text())
     assert len(data["events"]) == 3
     assert data["session"]["outcome"] == "completed"
-    assert data["session"]["cursor_stats"]["model"] == "claude-opus-4-6"
+    assert data["session"]["cursor_stats"]["model"] == "claude-sonnet-4-6"
+    assert data["session"]["cursor_stats"]["tokens_in"] == FAKE_TOKENS["tokens_in"]
+    assert data["session"]["cursor_stats"]["tokens_out"] == FAKE_TOKENS["tokens_out"]
 
     # Verify parent chain
     step_ids = [e["step_id"] for e in data["events"]]

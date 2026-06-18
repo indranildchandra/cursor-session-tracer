@@ -15,8 +15,7 @@ At the start of any task involving more than 2 files or any architectural change
 
 4. When the task is complete or you are stopping, call `end_trace` with:
    - `outcome` set to `completed`, `partial`, or `aborted`
-   - `model` set to the model name you are running on (e.g. `claude-sonnet-4-5`)
-   - `tokens_in`, `tokens_out`, `cost_usd` if you have access to these values
+   - Do NOT pass model, tokens_in, or tokens_out — these are captured automatically from Cursor's local database.
 
 Do not call `append_trace` for trivial actions like reading a config file to check syntax. Call it when you are making a decision that affects other files or that a reviewer would want to understand three weeks from now.
 
