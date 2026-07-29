@@ -153,7 +153,7 @@ Three MCP tools integrate into Cursor's agentic loop, served by FastMCP mounted 
 
 | Tool | The agent calls it… | What it does |
 | --- | --- | --- |
-| `start_trace(task, files_in_scope, adr_id="")` | at the start of a multi-file task | creates the trace file, returns a `session_id`; auto-detects model + Cursor session from the local DB; links the ADR if given |
+| `start_trace(task_description, files_in_scope, adr_id="")` | at the start of a multi-file task | creates the trace file, returns a `session_id`; auto-detects model + Cursor session from the local DB; links the ADR if given |
 | `append_trace(session_id, type, reason, files_*, parent_step_id)` | before each significant decision | appends an event; auto-increments `tool_call_count`; logs mid-session model switches |
 | `end_trace(session_id, outcome)` | when the task completes or stops | writes `ended_at`, `outcome`, and token counts read from Cursor's DB |
 
@@ -322,20 +322,37 @@ python audit_trace.py --session 20260729/dde097e6 --json | jq .   # PR-comment /
 The committed sample session is **faithful** to ADR-0001:
 
 ```text
-──────────────── Plan vs. Path — FAITHFUL ────────────────
-✓ Implemented in scope (4/4):  demo/resilience.py, demo/clients/stripe.py,
-                               demo/clients/github.py, demo/main.py
+──────────── Plan vs. Path — FAITHFUL ────────────
+ADR:   docs/adr/ADR-0001-resilient-idempotent-checkout.md
+Trace: session dde097e6 | adr_id=ADR-0001
+
+✓ Implemented in scope (4/4):
+    demo/clients/github.py
+    demo/clients/stripe.py
+    demo/main.py
+    demo/resilience.py
+
+· Read outside scope (informational, 1): docs/adr/ADR-0001-resilient-idempotent-checkout.md
+
 Verdict: the path stayed faithful to the plan.
 ```
 
-When drift occurs, the audit surfaces it explicitly:
+When drift occurs (e.g. the agent also edits a file the ADR never scoped), the audit surfaces it and exits non-zero:
 
 ```text
-──────────────── Plan vs. Path — DRIFT DETECTED ────────────────
-✓ Implemented in scope (1/4):  demo/resilience.py
-○ Planned but not touched (3): demo/clients/github.py, demo/clients/stripe.py, demo/main.py
+──────────── Plan vs. Path — DRIFT DETECTED ────────────
+✓ Implemented in scope (1/4):
+    demo/resilience.py
+
+○ Planned but not touched (3):
+    demo/clients/github.py
+    demo/clients/stripe.py
+    demo/main.py
+
 ✗ LLD DRIFT — changed but not in the ADR (1):
     demo/auth.py  ← reviewer should ask why
+
+Verdict: the implementation drifted from the plan. Surface the drift for human review.
 ```
 
 ---
@@ -428,7 +445,7 @@ cursor-session-tracer/
 ├── .github/workflows/ci.yml     # CI: ruff lint + tests/coverage + dogfood audit
 ├── Makefile                     # setup / dev / test / cov / lint / server / audit
 ├── pyproject.toml               # pytest + ruff config
-├── requirements.txt             # runtime deps
+├── requirements.txt             # app + test deps (fastapi, mcp, rich, pytest, …)
 ├── requirements-dev.txt         # + ruff, pytest-cov (CI/lint)
 ├── .python-version              # 3.12
 ├── DEMO-RUNBOOK.md              # live-demo guide + quick-reference commands
