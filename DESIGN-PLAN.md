@@ -1,6 +1,6 @@
 # Cursor Session Tracer — Design Plan
 
-## Plan vs. Path: pairing an implementation trace with the decision that authorised it
+## Plan vs. Path: pairing an implementation trace with the decision that authorized it
 
 **Talk + Build Design Document**
 Indranil Chandra
@@ -10,7 +10,7 @@ Indranil Chandra
 > May 2026), which shipped the tracer alone. v2 adds the other half of the story —
 > the **plan** — and the check that ties plan to path.
 
-[Talk Deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/view)
+[Talk Deck — *Your Code and its Story*](https://docs.google.com/presentation/d/1oHJMMNaRB0YSWZ1QvJi6oMi6NmJgFpfaWtJ6BmRlhHc/view)
 
 ---
 
@@ -27,6 +27,7 @@ It was a good answer to half a question. v2 adds the missing half:
 | **Plan-vs-path check** | ✗ none | ✅ `audit_trace.py` flags **LLD drift** |
 | **Skill packaging** | n/a | Cursor-native (`.cursor/commands`, `.cursor/review-council`) |
 | **Demo** | auth refactor (`APIKeyAuth → BearerTokenAuth`) | **resilient, idempotent checkout** — a decision worth reviewing |
+| **CI & quality** | ✗ none | ✅ GitHub Actions: ruff lint, pytest + coverage (~94%), dogfood audit of sample trace |
 
 The through-line: a record is only trustworthy if it is a **byproduct of the work**,
 not a separate artifact someone must remember to update. The trace is a byproduct of
@@ -408,7 +409,14 @@ the box against ADR-0001.
 
 ## 12. Roadmap / future scope
 
-Framed for a newcomer: here is where the project is and where it goes next.
+**Where this is today:** a working, local, single-developer system with CI on every
+push/PR (`.github/workflows/ci.yml`): **ruff** lint, **pytest** with coverage (~94% line
+coverage across `src/`, `render_trace.py`, and `audit_trace.py`), reference-solution tests
+under `files-changed post-demo-run/`, and an **audit-self-check** job that re-runs
+`audit_trace.py --session 20260729/dde097e6` against the committed sample trace — the tool
+dogfoods its own plan-vs-path check.
+
+**Where it goes next:**
 
 - **Pluggable graph/analytics trace store (the next logical step).** The schema is
   deliberately graph-shaped (§5.4). A `TraceStore` interface with a flat-file default and
@@ -420,8 +428,9 @@ Framed for a newcomer: here is where the project is and where it goes next.
 - **Per-session cost capture.** Cursor's DB gives token counts but not dollar cost; deriving
   `cost_usd` needs a maintained `model → price` map. Dropped for now to avoid a stale price
   table — contributions welcome to add an opt-in pricing map.
-- **CI integration.** Wire `audit_trace.py --json` into a PR check that comments the
-  plan-vs-path report and gates on LLD drift.
+- **CI gate on PR traces.** CI today lints, tests, and audits the *committed sample* trace.
+  Next step: run `audit_trace.py --json` on traces attached to PRs, comment the
+  plan-vs-path report, and exit non-zero on LLD drift.
 - **Agentic reviewer.** `audit_trace.py` supplies the ground-truth file diff; layer an agent
   that judges *semantic* faithfulness — did the change honor the ADR's intent, not just its
   file list.
@@ -434,15 +443,23 @@ Framed for a newcomer: here is where the project is and where it goes next.
 
 - **Python 3.12** (reference: `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3`
   on macOS). Validated on 3.12.3.
-- **Makefile:** `make setup` (venv + deps + demo CLI tools via Homebrew: `glow`, `watch`,
-  `jq`), `make test`, `make server`, `make audit SESSION=…`, `make setup-tools` (CLI tools
-  only). macOS override: `make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3`.
+- **Makefile:**
+  - `make setup` — venv + `requirements.txt` + demo CLI tools via Homebrew (`glow`, `watch`, `jq`)
+  - `make dev` — install `requirements-dev.txt` (ruff, pytest-cov)
+  - `make test` · `make cov` (terminal + `htmlcov/index.html`) · `make lint` · `make format`
+  - `make server` · `make audit SESSION=…` · `make setup-tools` (CLI tools only)
+  - macOS override: `make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3`
 - **Demo presentation:** `curl … | jq .` for JSON; `glow` for ADR / design-review markdown;
   `watch` for live trace panes during implementation.
-- **Dependencies** pinned in `requirements.txt`; `make setup` builds an isolated `.venv`.
-- **Tests** (`pytest`, Python 3.12) cover file utils, all three MCP tools (incl. `adr_id`),
-  the cross-platform Cursor-DB reader, both renderers, the plan-vs-path audit, and the demo
-  canary.
-- **Docs map:** [README.md](README.md) (overview) · [DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)
-  (presenter commands) · [CONTRIBUTING.md](CONTRIBUTING.md) (PR guide) ·
-  [docs/adr/README.md](docs/adr/README.md) (ADR model).
+- **Dependencies:** runtime in `requirements.txt`; dev/CI in `requirements-dev.txt`.
+- **Tests:** **110 tests, ~94% line coverage**, nothing skipped (`pytest`, Python 3.12).
+  Coverage spans file utils, all three MCP tools (incl. `adr_id`), the cross-platform Cursor-DB
+  reader, FastAPI endpoints, both renderers (incl. CLIs), plan-vs-path audit (functions +
+  CLI), demo canary (`tests/test_demo.py`), and post-ADR reference tests under
+  `files-changed post-demo-run/tests/`.
+- **CI:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on push/PR — ruff, pytest +
+  coverage, reference-solution tests, and `audit_trace.py --session 20260729/dde097e6`.
+- **Docs map:** [README.md](README.md) (overview) ·
+  [Talk deck](https://docs.google.com/presentation/d/1oHJMMNaRB0YSWZ1QvJi6oMi6NmJgFpfaWtJ6BmRlhHc/edit?usp=sharing) ·
+  [DEMO-RUNBOOK.md](DEMO-RUNBOOK.md) (presenter commands) · [CONTRIBUTING.md](CONTRIBUTING.md)
+  (PR guide) · [docs/adr/README.md](docs/adr/README.md) (ADR model).

@@ -38,7 +38,7 @@
 | **Check** | `audit_trace.py` flags **LLD drift** (files changed outside the ADR scope) |
 | **Try offline** | Committed sample session `20260729/dde097e6` — no Cursor session required |
 
-**Documentation:** [DEMO-RUNBOOK.md](DEMO-RUNBOOK.md) (presenter commands) · [DESIGN-PLAN.md](DESIGN-PLAN.md) (talk + architecture) · [docs/adr/README.md](docs/adr/README.md) (ADR model)
+**Documentation:** [Talk deck](https://docs.google.com/presentation/d/1oHJMMNaRB0YSWZ1QvJi6oMi6NmJgFpfaWtJ6BmRlhHc/view) · [DESIGN-PLAN.md](DESIGN-PLAN.md) (talk + architecture) · [DEMO-RUNBOOK.md](DEMO-RUNBOOK.md) (demo commands) · [docs/adr/README.md](docs/adr/README.md) (ADR model)
 
 ---
 
@@ -235,7 +235,7 @@ That's a decision worth reviewing, not just coding. The demo walks the full loop
 3. **Check** — `audit_trace.py` verifies scope faithfulness (or flags LLD drift)
 4. **Prove** — checkout dedupe test shows the double-charge bug is closed
 
-Step-by-step commands (three-terminal layout, copy-paste appendix): **[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)**.
+Step-by-step commands (three-terminal layout, copy-paste appendix): **[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)**. Slide deck for the talk: **[Your Code and its Story — Adversarial Review & Cursor Session Tracer](https://docs.google.com/presentation/d/1oHJMMNaRB0YSWZ1QvJi6oMi6NmJgFpfaWtJ6BmRlhHc/view)**.
 
 Sample session **`20260729/dde097e6`** ships in-repo — use it in the examples below without running a live implement pass.
 
