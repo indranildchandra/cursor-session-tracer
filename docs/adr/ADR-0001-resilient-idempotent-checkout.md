@@ -1,37 +1,40 @@
-# ADR-0001: Resilient, idempotent outbound calls for the checkout flow
+# ADR-0001: Resilient, Idempotent Checkout Outbound Calls
 
 - **Status:** Accepted
-- **Date:** 2026-05-09
-- **Deciders:** Indranil Chandra + review-council (5 personas)
-- **Review record:** `docs/design-review.md` (2026-05-09 06:40:00)
-- **Implemented by trace:** `pending` — link at `start_trace` via `adr_id="ADR-0001"`
-- **Follow-up:** distributed circuit-breaker state → **ADR-0002** (see Consequences)
+- **Date:** 2026-07-29
 
 ## Context
 
-`POST /checkout` charges via Stripe, then writes a receipt via GitHub — each call direct
-and unguarded. Three problems, entangled:
+The demo checkout service (`POST /checkout`) charges a customer via Stripe, then records a
+receipt as a GitHub issue. Both outbound calls are made directly with no idempotency key,
+retry policy, or circuit breaker. A client retry after timeout double-charges the customer
+(two identical `POST /checkout` calls with the same `order_id` produce two distinct charges).
 
-- **Not idempotent** → a retried charge **double-charges** the customer (money bug).
-- **No retries** → a transient 5xx becomes a hard checkout failure.
-- **No backpressure** → during a Stripe outage every request keeps hitting a dead dependency.
+Auth is already handled (`BearerTokenAuth`) and is **not** in scope. The architectural gap
+is resilience and idempotency on the two mutating outbound dependencies.
 
-They can't be fixed independently: adding retries *before* idempotency turns the
-double-charge from "on manual retry" into "automatic, every time." That coupling is why
-this is one ADR, not three tweaks.
+Human brief (Phase 0): primary worry is **double-charging on retry**; no hard constraints
+on approach.
 
 ## Decision
 
-Introduce one resilient transport, `demo/resilience.py`, and route both clients' mutating
-calls through it. Applied **in this order** (the order is the safety property):
+Introduce a single resilient transport module (`demo/resilience.py`) and route both mutating
+outbound calls through it:
 
-1. **Idempotency key** — derived from the logical operation (`order_id`); short-circuits a
-   repeat of an already-succeeded key, so a retry can never double-charge.
-2. **Retry** — bounded, exponential backoff + **full jitter**, transient (5xx/timeout) only.
-3. **Circuit breaker** — per dependency; opens after repeated failures and fails fast for a
-   cool-down window instead of piling on.
+1. **Idempotency first** — derive an idempotency key from the logical operation (`order_id`
+   for charge and receipt). Short-circuit if the key already succeeded (return cached result).
+2. **Retry with backoff + full jitter** — bounded retries (max 3), exponential base delay
+   (100ms), full jitter, **transient failures only** (5xx / simulated transient errors).
+3. **Per-dependency circuit breaker** — keyed by dependency base URL (Stripe vs GitHub) so
+   an outage on one does not open the breaker on the other.
 
-`demo/main.py` still orchestrates; the reliability policy lives in exactly one seam.
+Apply policy in this order: **idempotency → retry → circuit breaker** (idempotency wraps the
+retry loop so a retried attempt reuses the same key).
+
+Wire `StripeClient.charge` and `GitHubClient.create_receipt_issue` through the transport.
+Keep `demo/main.py` orchestration thin (charge, then receipt). Do **not** change auth.
+
+Inject `sleep` / RNG in the transport for deterministic tests.
 
 ## Scope (files)
 
@@ -42,29 +45,33 @@ calls through it. Applied **in this order** (the order is the safety property):
 
 ## Alternatives Considered
 
-- **Per-client ad-hoc retry** — rejected: duplicates the policy and makes the
-  idempotency/retry ordering easy to get wrong per client (the dangerous case).
-- **A retry library (`tenacity`/`stamina`)** — reasonable in production, rejected here to
-  stay dependency-light and keep the idempotency-before-retry ordering explicit (the teaching point).
-- **Distributed breaker (Redis) now** — rejected for this change (see override below).
+| Alternative | Why rejected |
+| --- | --- |
+| Per-client retry logic in `stripe.py` and `github.py` | Duplicates policy; easy to apply retries before idempotency on one client only |
+| Retries without idempotency | **Blocked by council** — turns manual double-charge into automatic double-charge |
+| Saga / compensating transaction for charge-then-receipt | Correct for production partial-failure, but out of scope for this demo; receipt dupes are annoying, not financial |
+| Change auth or add inbound request idempotency middleware | Out of scope; auth is already solved; outbound mutating calls are the seam |
 
 ## Consequences
 
-- **Positive:** the double-charge bug is closed at the seam; transient failures become
-  invisible; an outage degrades instead of cascading. One auditable module owns the policy.
-- **Trade-off:** breaker state is **in-memory / per-process** — a multi-instance fleet trips
-  later than a single logical breaker would.
-- **Risks flagged by council:** retry storm without jitter + breaker (converged: staff +
-  cost); double-charge if retries ship before idempotency (blocker: appsec + staff).
+- Double-charge on client retry is closed for outbound calls keyed by `order_id`.
+- Transient Stripe/GitHub failures get bounded retries instead of immediate hard failure.
+- Circuit breaker limits retry pile-on during sustained outages.
+- Partial failure (charge succeeds, receipt fails) can still occur; receipt is not financial
+  risk but may duplicate on unkeyed client retries of the whole endpoint — mitigated by
+  outbound idempotency on the receipt call.
+- New module is the single place to evolve resilience policy.
+
+### Risks flagged by council
+
+- **Blocker (resolved in decision):** retries before idempotency on charge path
+- **Converged:** retry storm without jitter + breaker during dependency outage
+- **Open (accepted):** charge-then-receipt partial failure without saga — documented, not blocking demo
 
 ## Council Verdict
 
-**Proceed with modifications** — 5 personas (staff-engineer, appsec-architect,
-cloud-cost-architect, senior-backend-engineer, lead-sdet).
+**Proceed with modifications** — adopt single transport; enforce idempotency-before-retry ordering; scope limited to four files above.
 
-- **Modification required:** full jitter + circuit breaker are in scope, not optional.
-- **Blocker (resolved by design):** appsec + staff blocked "retries before idempotency";
-  resolved by the ordered dependency above — retries live strictly behind the idempotency key.
-- **Human override (recorded):** council wanted distributed breaker state; Indranil overrode
-  — *"single-instance demo; a per-process breaker is honest for the scope and I don't want
-  Redis on stage"* — and filed **ADR-0002** rather than silently dropping it.
+## Review record
+
+See [design-review.md — 2026-07-29 checkout flow](../design-review.md#2026-07-29--checkout-flow-stripe--github-receipt).
