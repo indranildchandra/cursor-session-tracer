@@ -1,25 +1,53 @@
 # DEMO CURSOR CHAT
 
-## User Request
+An illustrative agent transcript for the live demo — implementing **ADR-0001**
+(resilient, idempotent checkout) with the tracer running. Yours will differ.
 
-Refactor all API clients in this codebase to use the new BearerTokenAuth
-pattern from demo/auth.py instead of APIKeyAuth. Update demo/main.py,
-demo/clients/github.py, and demo/clients/stripe.py. Make sure the
-get_current_auth() function also returns the new auth type.
+## User request
 
-## Cursor Response
+> Implement ADR-0001. Create `demo/resilience.py` with an idempotency key applied
+> *before* a retry loop (exponential backoff + full jitter, transient failures only)
+> behind a per-dependency circuit breaker, and route `StripeClient.charge` and
+> `GitHubClient.create_receipt_issue` through it. Start a trace with `adr_id="ADR-0001"`.
 
-Got it. I’ll first inspect the existing auth abstractions (demo/auth.py) and how each client currently wires APIKeyAuth, then update the shared get_current_auth() to return BearerTokenAuth and refactor demo/main.py, demo/clients/github.py, and demo/clients/stripe.py accordingly. Finally I’ll run the test suite to ensure everything still works.
+## Cursor response (abridged)
 
-I’ve found the old pattern is still hard-coded in get_current_auth() and both clients construct APIKeyAuth() directly. Next I’ll update get_current_auth() to return BearerTokenAuth, refactor the two clients to use it (or directly use BearerTokenAuth), then adjust demo/main.py imports and run tests to confirm nothing else relies on APIKeyAuth.
+I'll follow ADR-0001. First I'll open it to confirm scope and the ordering constraint
+(idempotency must precede retries), then start a trace linked to it.
 
-Core refactor is in place: get_current_auth() now yields BearerTokenAuth, and both GitHubClient/StripeClient now use that new auth class. Next I’ll run the tests and a quick lint check on the touched files, then close out the trace.
+→ `start_trace(task_description="Implement resilient idempotent checkout",
+files_in_scope=["demo/resilience.py","demo/clients/stripe.py","demo/clients/github.py","demo/main.py"],
+adr_id="ADR-0001")` → session `a1b2c3d4`.
 
-Done
-demo/auth.py: get_current_auth() now returns BearerTokenAuth (and its return type annotation is updated accordingly).
-demo/clients/github.py: switched from APIKeyAuth to BearerTokenAuth.
-demo/clients/stripe.py: switched from APIKeyAuth to BearerTokenAuth.
-demo/main.py: removed the unused APIKeyAuth import; validate_auth() now reports the new auth type via get_current_auth().
+Creating the transport. The order matters: apply the `order_id`-derived idempotency key,
+short-circuit an already-succeeded key, then run the bounded retry loop with full jitter,
+all behind a circuit breaker keyed per dependency base URL.
 
-Verification
-Tests: pytest -q passes (54 passed).
+→ `append_trace(type="file_create", reason="resilience.py: idempotency -> retry(backoff+jitter,
+transient-only) -> per-dependency circuit breaker. Idempotency first so a retry reuses the key.",
+files_created=["demo/resilience.py"], parent_step_id="")` → `step_001`.
+
+Now routing the money path. `StripeClient.charge` goes through the transport with `order_id`
+as the idempotency key, so a retried charge dedupes instead of double-charging.
+
+→ `append_trace(type="file_modify", reason="Route charge() through transport; order_id is the
+idempotency key — closes the double-charge bug.", files_modified=["demo/clients/stripe.py"],
+parent_step_id="step_001")` → `step_002`.
+
+Routing the receipt call through the same transport for consistent backoff, then wiring
+`main.py`'s checkout to the updated clients.
+
+→ `append_trace(... files_modified=["demo/clients/github.py"], parent_step_id="step_002")` → `step_003`
+→ `append_trace(... files_modified=["demo/main.py"], parent_step_id="step_003")` → `step_004`
+
+Tests pass, including the deterministic backoff/dedupe/breaker cases. Closing the trace.
+
+→ `end_trace(session_id="a1b2c3d4", outcome="completed")` — model and token counts read from
+Cursor's local DB automatically.
+
+## After the session
+
+```bash
+python render_trace.py --session <date>/a1b2c3d4     # header shows: implements: ADR-0001
+python audit_trace.py  --session <date>/a1b2c3d4     # Plan vs. Path — FAITHFUL (all touches in scope)
+```

@@ -96,6 +96,23 @@ def test_start_trace_no_cursor_db(monkeypatch):
     assert stats["composer_id"] is None
 
 
+def test_start_trace_adr_id_none_by_default():
+    result = start_trace("Task with no ADR", ["src/x.py"])
+    data = json.loads(Path(result["trace_file_path"]).read_text())
+    assert data["session"]["adr_id"] is None
+
+
+def test_start_trace_links_adr_id():
+    """When an adr_id is passed, the trace records which ADR it implements."""
+    result = start_trace(
+        "Implement resilient idempotent checkout",
+        ["demo/resilience.py"],
+        adr_id="ADR-0001",
+    )
+    data = json.loads(Path(result["trace_file_path"]).read_text())
+    assert data["session"]["adr_id"] == "ADR-0001"
+
+
 # ---------------------------------------------------------------------------
 # append_trace
 # ---------------------------------------------------------------------------
@@ -112,7 +129,7 @@ def test_append_trace_returns_step_id(active_session):
     result = append_trace(
         session_id=active_session["session_id"],
         type="decision",
-        reason="auth.py uses APIKeyAuth. Rewriting to BearerTokenAuth.",
+        reason="charge() is not idempotent; a retry double-charges. Routing it through resilience.py.",
         files_read=["src/auth.py"],
         files_modified=[],
         files_created=[],

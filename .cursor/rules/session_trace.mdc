@@ -7,9 +7,9 @@ alwaysApply: false
 
 At the start of any task involving more than 2 files or any architectural change:
 
-1. Call `start_trace` with the full task description and the list of files you expect to touch. Store the returned `session_id` — you will need it for every subsequent call. Also note the returned `trace_file_path` so you can reference it later.
+1. Call `start_trace` with the full task description and the list of files you expect to touch. Store the returned `session_id` — you will need it for every subsequent call. Also note the returned `trace_file_path` so you can reference it later. If this work implements a decision recorded in an ADR (see `docs/adr/`), pass its id as `adr_id` (e.g. `"ADR-0001"`) so the trace links back to the plan.
 
-2. Before each significant decision — reading a file to understand structure, choosing an implementation approach, modifying a file that other files depend on — call `append_trace`. The `reason` field must be specific. Not "modified auth.py" but "modified auth.py to replace APIKeyAuth with BearerTokenAuth because downstream clients expect a `.headers` property that the old class does not expose."
+2. Before each significant decision — reading a file to understand structure, choosing an implementation approach, modifying a file that other files depend on — call `append_trace`. The `reason` field must be specific. Not "modified stripe.py" but "routed StripeClient.charge through the resilient transport with order_id as the idempotency key, so a retried charge dedupes instead of double-charging."
 
 3. Pass the `step_id` returned from each `append_trace` call as `parent_step_id` in the next call. This is what builds the reasoning chain. For the very first `append_trace`, pass `""` as `parent_step_id`.
 

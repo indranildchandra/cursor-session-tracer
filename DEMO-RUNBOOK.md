@@ -1,202 +1,200 @@
 # DEMO RUNBOOK
 
-## cursor-session-tracer — Live Demo Guide
+## cursor-session-tracer — live demo guide
 
-**Talk:** When the Agent Drives, Who Holds the Wheel?
-**Event:** Cursor Community Meetup Mumbai | May 2026
-**Slot:** Minutes 8–16 (8 minutes live)
+**Talk:** Your Code and its Story — Told by Adversarial Review & Cursor Session Tracer
+**Thesis:** Docs drift, traces don't. Plan (ADR) vs. path (trace), with a drift check between them.
+
+The demo walks one loop on a deliberately broken app: **adversarial review → ADR → implement with tracing → audit plan vs. path.**
 
 ---
 
-## Pre-Demo Setup (do this before the talk)
+## 0. Pre-demo setup (do this before you present)
 
-### 1. Start the MCP server
-
-```bash
-cd /path/to/cursor-session-tracer
-bash run_server.sh
-```
-
-Server starts on `http://127.0.0.1:8080`. Leave this terminal open.
-
-### 2. Verify the server is healthy
+### Environment (Python 3.12)
 
 ```bash
-curl http://127.0.0.1:8080/health
-# {"status":"ok","service":"cursor-session-tracer"}
+git clone https://github.com/indranildchandra/cursor-session-tracer
+cd cursor-session-tracer
+make setup        # macOS: make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+make test         # expect all green
 ```
 
-### 3. Configure Cursor to use the MCP server
-
-In Cursor → Settings → MCP Servers, add:
-
-```json
-{
-  "cursor-session-tracer": {
-    "url": "http://127.0.0.1:8080/mcp"
-  }
-}
-```
-
-### 4. Open the demo repo in Cursor
+### Start the tracer server
 
 ```bash
-cursor /path/to/cursor-session-tracer/demo
+make server       # http://127.0.0.1:8080  — leave this terminal running
+# verify:
+curl http://127.0.0.1:8080/health          # {"status":"ok","service":"cursor-session-tracer"}
 ```
 
-### 5. Split the screen
+### Point Cursor at the server
 
-- **Left pane:** Cursor agent chat
-- **Right pane:** Terminal watching `.cursor/traces/` in real time
+`.cursor/mcp.json` is already committed, so opening this repo in Cursor auto-registers the tracer. Confirm under **Cursor → Settings → MCP** that `cursor-session-tracer` shows **connected**. (If not, add `{"cursor-session-tracer": {"url": "http://127.0.0.1:8080/mcp"}}`.)
+
+### Confirm the Cursor rule + command are installed
+
+Both live in `.cursor/` and load automatically when the repo is open:
+
+- **Rule:** `.cursor/rules/session_trace.mdc` → appears under **Cursor → Rules**.
+- **Command (Cursor 1.6+):** `.cursor/commands/design-review.md` → type `/` in the agent chat and confirm **`design-review`** appears (Cursor auto-discovers any `.md` in `.cursor/commands/`). Its personas are in `.cursor/review-council/`. If `/design-review` doesn't appear, check **Cursor → Settings** that you're on 1.6+.
+
+> Installing into another repo: copy the whole `.cursor/` folder (`mcp.json`, `rules/`, `commands/`, `review-council/`) and `docs/adr/TEMPLATE.md` into the target project, then point that repo's `.cursor/mcp.json` at your running tracer.
+
+### Split the screen
+
+- **Left:** Cursor agent chat.
+- **Right:** a terminal watching traces appear:
 
 ```bash
-# Right pane — watch for new trace files
 watch -n 1 "find .cursor/traces -name '*.json' | sort"
 ```
 
-### 6. Confirm the Cursor rule is active
+---
 
-Open Cursor → Rules — you should see `session_trace.mdc` listed.
+## 1. Set the scene — the broken app (≈1 min)
+
+> "This is a checkout service. `POST /checkout` charges the customer, then writes a receipt. Every call is made directly — no idempotency, no retries, no circuit breaker."
+
+Show the bug is real, not hypothetical:
+
+```bash
+.venv/bin/python - <<'EOF'
+from demo.clients.stripe import StripeClient
+sc = StripeClient()
+sc.charge("cus_1", 5000)          # first attempt
+sc.charge("cus_1", 5000)          # a retry of the same order
+print("charges recorded:", len(sc.charges), "→ the customer was charged twice")
+EOF
+```
+
+> "A timed-out checkout that the client retries double-charges the customer. That's not a lint nit — that's money. This is a decision worth reviewing, not just coding."
 
 ---
 
-## Live Demo Script
+## 2. Plan — run the adversarial review (≈3–5 min)
 
-### Step 1 — Set the scene
+**Option A — run it live.** In the Cursor agent chat:
 
-> "Here's the demo app — a small FastAPI service. It has GitHub and Stripe API clients
-> both using an old `APIKeyAuth` pattern. I'm going to give the agent a real refactoring
-> task and you'll watch the reasoning chain form in real time."
-
-### Step 2 — Give the agent a task
-
-Type in Cursor agent chat:
-
-```text
-Refactor all API clients in this codebase to use the new BearerTokenAuth
-pattern from demo/auth.py instead of APIKeyAuth. Update demo/main.py,
-demo/clients/github.py, and demo/clients/stripe.py. Make sure the
-get_current_auth() function also returns the new auth type.
+```
+/design-review the checkout flow in demo/ — Stripe charge + GitHub receipt, currently unguarded
 ```
 
-Point at the screen:
-> "Watch the right pane — the agent is about to call `start_trace` before it touches
-> anything. There's the session ID. There's the trace file appearing."
+Narrate as the council forms: independent personas (staff-engineer, appsec-architect, cloud-cost-architect, …) review in isolation, then debate. Land on the two outcomes that matter:
 
-### Step 3 — Let the agent run
+> "Two things the council caught that a single reviewer might not. One — a **blocker**: you cannot add retries before idempotency, or you turn a manual double-charge into an automatic one. Two — a **converged concern**: backoff without jitter plus no circuit breaker is a retry storm during an outage. Both go into the ADR."
 
-Let the agent work through 4–6 steps. While it runs, narrate what's happening:
-
-- When `start_trace` fires:
-  > "Session started. Session ID returned. Agent stores it — it'll pass it to every
-  > subsequent tool call."
-
-- When `append_trace` fires for the first decision:
-  > "Before modifying `auth.py`, the agent logs why. Not what — why. That `reason`
-  > field is the difference between a diff and a decision trail."
-
-- When the parent chain starts forming:
-  > "See `parent_step_id`? Step 003 points to step 002 which points to step 001.
-  > That's a graph, not a list. The reasoning chain is directional."
-
-### Step 4 — Render the trace
-
-Open a new terminal tab (keep agent visible):
+**Option B — if you're tight on time, show the pre-baked artefacts:**
 
 ```bash
-# Find your session date and ID from the trace file path
-python render_trace.py --session 20260509/<SESSION_ID>
+sed -n '1,40p' docs/adr/ADR-0001-resilient-idempotent-checkout.md   # the decision
+sed -n '1,30p' docs/design-review.md                                # the transcript it came from
 ```
 
-The tree prints to stdout. Walk through one decision:
-> "Here's step 001 — the agent read `auth.py`, saw it was using `APIKeyAuth`, and
-> decided the downstream clients all need updating because they import it directly.
-> That's the reasoning chain. A reviewer gets this upfront instead of reverse-engineering
-> it from the diff."
-
-### Step 5 — End the session and show final trace
-
-The agent will call `end_trace` when done. If not, prompt it:
-
-```text
-End the trace session with outcome "completed".
-```
-
-Then show the sessions endpoint:
-
-```bash
-curl http://127.0.0.1:8080/sessions | python3 -m json.tool
-```
-
-> "Every session is queryable. Outcome, event count, Cursor usage stats —
-> model, token counts, cost — all in the trace."
-
-### Step 6 — Optional: Mermaid output
-
-```bash
-python render_trace.py --session 20260509/<SESSION_ID> --mode mermaid
-```
-
-> "This goes straight into a PR as an attachment. The reviewer sees the decision flow
-> before they open the diff."
+> "The full debate is in `design-review.md`. The **ADR is the distilled decision** — context, the decision, the scope of files it touches, alternatives rejected, and the verdict. That `Scope (files)` list is a machine contract; you'll see why in a second."
 
 ---
 
-## Fallback: If Cursor doesn't call the MCP tools automatically
+## 3. Path — implement with the tracer running (≈4 min)
 
-Run the tools manually via the test script to show the data model:
+Give the agent the task, telling it which ADR it implements:
+
+```
+Implement ADR-0001. Create demo/resilience.py with an idempotency key applied before a
+retry loop (exponential backoff + full jitter, transient failures only) behind a
+per-dependency circuit breaker, and route StripeClient.charge and
+GitHubClient.create_receipt_issue through it. Start a trace with adr_id="ADR-0001".
+```
+
+Point at the right pane:
+
+> "Before it touches a file, it calls `start_trace` — and notice it passes `adr_id=ADR-0001`. The trace now *declares which plan it's executing*. Watch the events land: each one logs **why**, not just what, and each points at its parent. That's a reasoning graph, not a log."
+
+When it finishes, it calls `end_trace`. Then render the reasoning chain:
 
 ```bash
-# In the .venv shell
-python3 - <<'EOF'
+# grab the session path from the right pane, then:
+python render_trace.py --session <YYYYMMDD>/<session_id>
+```
+
+> "Header says `implements: ADR-0001`. A reviewer gets this reasoning chain up front instead of reverse-engineering it from the diff."
+
+---
+
+## 4. Check — plan vs. path (≈2 min)
+
+```bash
+python audit_trace.py --session <YYYYMMDD>/<session_id>
+# or: make audit SESSION=<YYYYMMDD>/<session_id>
+```
+
+> "This is the independent reviewer. It reads the ADR's declared scope and diffs it against what the trace actually touched. Everything in scope → **faithful**."
+
+Now show the failure mode — a change that wandered outside the plan:
+
+> "If the agent had also edited, say, `demo/auth.py` — a file the ADR never scoped — the audit flags it as **LLD drift**, exits non-zero, and that becomes a PR comment. `--json` makes it a CI gate."
+
+```bash
+python audit_trace.py --session <YYYYMMDD>/<session_id> --json   # exit 1 on drift
+```
+
+> "So a PR of the future ships as **code + ADR + trace**. The reviewer — human or agent — has the plan, the path, and an automatic check that they match."
+
+---
+
+## Fallback — if Cursor doesn't call the MCP tools automatically
+
+Drive the tools directly to show the data model (this is current, tested code):
+
+```bash
+.venv/bin/python - <<'EOF'
 import sys; sys.path.insert(0, ".")
 from src.mcp_server import start_trace, append_trace, end_trace
 
 r0 = start_trace(
-    task_description="Refactor API clients to use BearerTokenAuth",
-    files_in_scope=["demo/auth.py", "demo/clients/github.py", "demo/clients/stripe.py"]
+    task_description="Implement resilient idempotent checkout",
+    files_in_scope=["demo/resilience.py", "demo/clients/stripe.py",
+                    "demo/clients/github.py", "demo/main.py"],
+    adr_id="ADR-0001",
 )
 print("Started:", r0)
 
 r1 = append_trace(
-    session_id=r0["session_id"], type="decision",
-    reason="demo/clients/github.py imports APIKeyAuth directly. Must update import and constructor call to use BearerTokenAuth.",
-    files_read=["demo/clients/github.py"], files_modified=[], files_created=[], files_deleted=[],
-    parent_step_id=""
+    session_id=r0["session_id"], type="file_create",
+    reason="Create demo/resilience.py: idempotency key -> retry(backoff+jitter) -> circuit breaker.",
+    files_read=["demo/main.py"], files_modified=[], files_created=["demo/resilience.py"],
+    files_deleted=[], parent_step_id="",
 )
-print("Step 1:", r1)
-
 r2 = append_trace(
     session_id=r0["session_id"], type="file_modify",
-    reason="Replacing APIKeyAuth with BearerTokenAuth in GitHubClient.__init__. .headers property now returns Authorization: Bearer.",
-    files_read=["demo/clients/github.py"], files_modified=["demo/clients/github.py"], files_created=[], files_deleted=[],
-    parent_step_id=r1["step_id"]
+    reason="Route StripeClient.charge through the transport with order_id as the idempotency key.",
+    files_read=["demo/clients/stripe.py"], files_modified=["demo/clients/stripe.py"],
+    files_created=[], files_deleted=[], parent_step_id=r1["step_id"],
 )
-print("Step 2:", r2)
-
-r3 = end_trace(
-    session_id=r0["session_id"], outcome="completed",
-    model="claude-sonnet-4-5", tokens_in=8200, tokens_out=2100, cost_usd=0.0183
-)
-print("Ended:", r3)
+# model / tokens are auto-read from Cursor's local DB; nothing to pass here.
+print("Ended:", end_trace(session_id=r0["session_id"], outcome="completed"))
+print("Session:", r0["session_id"])
 EOF
 
-# Then render it
-python render_trace.py --session $(date +%Y%m%d)/<SESSION_ID_FROM_ABOVE>
+# then render + audit (find the date/session_id from the output above):
+python render_trace.py --session $(date +%Y%m%d)/<SESSION_ID>
+python audit_trace.py  --session $(date +%Y%m%d)/<SESSION_ID>
 ```
 
 ---
 
-## Key Lines to Say During the Demo
+## Key lines to say
 
-| Moment | What to say |
+| Moment | Line |
 | --- | --- |
-| `start_trace` fires | "Session open. Reasoning trail begins." |
-| `append_trace` fires | "Decision logged. Not what — why." |
-| Parent chain forms | "This is a graph, not a log. Directed. Queryable." |
-| Tree renders | "This is what a senior engineer gets before opening the PR." |
-| Cursor stats shown | "Model, tokens, cost — all in the trace. Agentic debt is now measurable." |
-| End of demo | "JSON today. Neo4j at org scale. Same schema." |
+| The double-charge | "That's not a lint nit — that's money." |
+| `/design-review` blocker | "The council blocked retries-before-idempotency. That's the ADR earning its keep." |
+| `start_trace(adr_id=…)` | "The trace declares which plan it's executing." |
+| `append_trace` | "It logs *why*, not what. That's the difference between a diff and a decision trail." |
+| Parent chain | "A reasoning graph, not a log. Directed. Queryable." |
+| `audit_trace` faithful | "Plan and path agree." |
+| `audit_trace` drift | "Changed a file the ADR never scoped. That's LLD drift — surfaced automatically." |
+| Close | "PR of the future: code + ADR + trace. Docs drift; these move with the code." |
 
 ---
 
@@ -204,17 +202,17 @@ python render_trace.py --session $(date +%Y%m%d)/<SESSION_ID_FROM_ABOVE>
 
 | Problem | Fix |
 | --- | --- |
-| Server not starting | `source .venv/bin/activate && uvicorn src.app:app --port 8080` |
-| Cursor not calling tools | Check MCP server URL in Cursor settings. Verify `session_trace.mdc` rule is active. |
-| Trace file not appearing | Check `.cursor/traces/` — date directory may differ from expected |
-| `render_trace.py` not finding session | Run `find .cursor/traces -name "*.json"` and use the actual date/session_id |
-| Port 8080 in use | Change port in `run_server.sh` and update Cursor MCP config accordingly |
+| Server won't start | `source .venv/bin/activate && uvicorn src.app:app --port 8080` |
+| Cursor not calling tools | Check MCP URL in Cursor settings; confirm `session_trace.mdc` is active |
+| `/design-review` not listed | Confirm `.cursor/commands/design-review.md` exists and the repo is open in Cursor |
+| Trace file not appearing | `find .cursor/traces -name '*.json'` — the date dir may differ from what you expect |
+| `render`/`audit` can't find session | use the actual `<date>/<session_id>` from `find .cursor/traces -name '*.json'` |
+| Tokens/model show null | Auto-capture needs a live Cursor session on the machine (macOS/Linux/Windows path). Expected when run outside Cursor. |
+| Port 8080 in use | change the port in `make server` / `.cursor/mcp.json` to match |
 
----
+## Post-demo URLs
 
-## Post-Demo URLs to Show
-
-- `http://127.0.0.1:8080/` — health
-- `http://127.0.0.1:8080/sessions` — all sessions, JSON
-- `http://127.0.0.1:8080/docs` — FastAPI auto-docs (Swagger UI)
-- `.cursor/traces/<date>/<session_id>/*.json` — raw trace file
+- `http://127.0.0.1:8080/health` — health
+- `http://127.0.0.1:8080/sessions` — all sessions as JSON (includes `adr_id`)
+- `http://127.0.0.1:8080/docs` — FastAPI Swagger UI
+- `docs/adr/ADR-0001-resilient-idempotent-checkout.md` — the plan · `docs/design-review.md` — the transcript

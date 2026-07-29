@@ -1,369 +1,302 @@
 # cursor-session-tracer
 
-Agentic observability for Cursor. Logs agent decisions, file touches, and reasoning chains in real time so you can debug prod regressions and review PRs by walking a trace instead of staring at a diff.
+**Agentic observability for Cursor.** When an agent restructures your codebase in a single session, git blame tells you *what* changed. This tells you **why** — a queryable, real-time reasoning trace of every decision, file touch, and reasoning chain, so you can debug a prod regression or review a PR by walking the trace instead of staring at the diff.
 
-Built for the talk **"When the Agent Drives, Who Holds the Wheel?"** — Cursor Community Meetup Mumbai, May 2026.
+<p>
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12+-blue.svg">
+  <img alt="MCP" src="https://img.shields.io/badge/protocol-MCP-8A2BE2.svg">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green.svg">
+  <img alt="Tests: pytest" src="https://img.shields.io/badge/tests-pytest-0A9EDC.svg">
+</p>
 
-[Talk Deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/view) · [Design Plan](DESIGN-PLAN.md) · [Demo Runbook](DEMO-RUNBOOK.md)
-
----
-
-## The Problem
-
-When an agent refactors 40 files in one session, git blame tells you what changed. It tells you nothing about why the agent made that sequence of decisions. When something breaks 48 hours later, you have no reasoning trail to follow.
-
-This is **agentic amnesia**. This tool fixes it.
+> **Docs drift. Traces don't.**
+> A trace is a byproduct of the work, not a separate artefact someone has to remember to update. Pair it with an **ADR** — the decision-of-record produced by an [adversarial review](.cursor/commands/design-review.md) *before* implementation — and you get **plan vs. path**: what was decided and why, next to what actually happened, with [`audit_trace.py`](audit_trace.py) checking one stayed faithful to the other.
 
 ---
 
-## How It Works
+## Table of contents
 
-Three MCP tools integrate into Cursor's agentic loop:
+- [Why](#why)
+- [The two-artefact model: plan vs. path](#the-two-artefact-model-plan-vs-path)
+- [Quickstart](#quickstart)
+- [How the tracer works](#how-the-tracer-works)
+- [Wire it into Cursor](#wire-it-into-cursor)
+- [The live demo](#the-live-demo)
+- [Rendering & auditing traces](#rendering--auditing-traces)
+- [Testing](#testing)
+- [Roadmap / future scope](#roadmap--future-scope)
+- [Project structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
 
-| Tool | When the agent calls it | What it does |
-| --- | --- | --- |
-| `start_trace` | Beginning of any multi-file task | Creates the trace file, returns a `session_id` |
-| `append_trace` | Before each significant decision | Appends a decision event with reason, file lists, parent chain |
-| `end_trace` | Task complete or stopped | Writes `ended_at`, outcome, and Cursor usage stats |
+---
 
-Every event has a `parent_step_id` pointer. That's what makes the trace a graph, not a log — the reasoning chain is directional and queryable.
+## Why
+
+Agentic coding is a new execution model, and it broke an assumption: that the person who wrote the code can explain it. When an agent reads 20 files and rewrites 40 in one session, it leaves the output and nothing else — no PR description written along the way, no Slack thread, no reasoning. We call this **agentic amnesia**. Forty-eight hours later, when something breaks, git bisect points you at the agentic commit and the diff is a wall of noise.
+
+The existing tools answer different questions:
+
+| Tool | Answers |
+| --- | --- |
+| Git history | *What* changed, when, by whom |
+| Step debugger | What is executing *right now* |
+| Unit test failure | Which assertion broke, on which input |
+| **Agentic session trace** | **Why** did the agent make *this* decision, given what it had read, at that point in the session |
+
+The fourth question is new. This project is a working answer to it.
+
+---
+
+## The two-artefact model: plan vs. path
+
+On long-lived brownfield projects the `docs/` folder is written once and never kept honest — the code moves on, the docs don't. The fix isn't more discipline; it's making the record a **byproduct of the work** at two moments:
+
+| Artefact | Produced | By | Answers | Lives in |
+| --- | --- | --- | --- | --- |
+| **ADR** — the *plan* | *before* implementation | [`review-council`](.cursor/commands/design-review.md): an adversarial review by 3–6 expert personas | *What did we decide, and why?* | [`docs/adr/`](docs/adr/) |
+| **Trace** — the *path* | *during* implementation | the three MCP tools below | *What did the agent actually do?* | `.cursor/traces/` |
+
+HLD already has a home for its "why" — the ADR. The **LLD layer has had none**: what happened inside a module, why a function was refactored, what the agent decided mid-session. The trace is that missing LLD record, and `adr_id` ties it back to the plan. The loop:
+
+```
+  /design-review            start_trace(adr_id=…)          audit_trace.py
+ ┌──────────────┐  ADR    ┌──────────────────┐  trace   ┌──────────────────┐
+ │ adversarial   │ ─────▶ │ implement with    │ ───────▶ │ plan vs. path:    │
+ │ review council│  plan   │ the tracer running │  path    │ flag LLD drift    │
+ └──────────────┘         └──────────────────┘          └──────────────────┘
+```
+
+A PR then ships as **code + ADR + trace** — and the reviewer, human or agent, gets the full context instead of reverse-engineering intent from the diff. See [`docs/adr/README.md`](docs/adr/README.md) for the full model.
 
 ---
 
 ## Quickstart
 
-### 1. Install dependencies
+Requires **Python 3.12**.
 
 ```bash
-python3 -m venv .venv
+git clone https://github.com/indranildchandra/cursor-session-tracer
+cd cursor-session-tracer
+
+make setup          # creates .venv (Python 3.12) and installs deps
+make test           # run the suite
+make server         # start the MCP + FastAPI server on http://127.0.0.1:8080
+```
+
+On macOS, if `python3.12` isn't on your `PATH`, point `make` at the framework build:
+
+```bash
+make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+```
+
+<details>
+<summary>Prefer raw commands (no <code>make</code>)?</summary>
+
+```bash
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2. Start the server
-
-```bash
-./run_server.sh
-# or directly:
+python -m pytest tests/ -q
 uvicorn src.app:app --host 127.0.0.1 --port 8080 --reload
 ```
+</details>
 
-Server runs on `http://127.0.0.1:8080`.
-
-### 3. Register with Cursor
-
-The file `.cursor/mcp.json` is already in this repo — Cursor picks it up automatically when you open the project:
-
-```json
-{
-  "mcpServers": {
-    "cursor-session-tracer": {
-      "url": "http://127.0.0.1:8080/mcp"
-    }
-  }
-}
-```
-
-> Requires Cursor 0.43+. Older versions: use `"url": "http://127.0.0.1:8080/sse"` instead.
-
-### 4. Activate the Cursor rule
-
-The rule at `.cursor/rules/session_trace.mdc` tells the agent when and how to call the tools. Set it to active in Cursor → Rules, or it activates automatically for any multi-file task.
+Health check: `curl http://127.0.0.1:8080/health` → `{"status":"ok","service":"cursor-session-tracer"}`
 
 ---
 
-## Trace File Structure
+## How the tracer works
 
-Traces are stored as JSON files under `.cursor/traces/`:
+Three MCP tools integrate into Cursor's agentic loop, served by FastMCP mounted on FastAPI:
 
-```bash
-.cursor/traces/
-  20260509/
-    a1b2c3d4/
-      143201_refactor_auth_clients.json
-```
+| Tool | The agent calls it… | What it does |
+| --- | --- | --- |
+| `start_trace(task, files_in_scope, adr_id="")` | at the start of a multi-file task | creates the trace file, returns a `session_id`; auto-detects model + Cursor session from the local DB; links the ADR if given |
+| `append_trace(session_id, type, reason, files_*, parent_step_id)` | before each significant decision | appends an event; auto-increments `tool_call_count`; logs mid-session model switches |
+| `end_trace(session_id, outcome)` | when the task completes or stops | writes `ended_at`, `outcome`, and token counts read from Cursor's DB |
 
-**Session header** (written by `start_trace`):
+Every event carries a `parent_step_id`. That's what makes the trace a **graph, not a log** — the reasoning chain is directional and queryable.
+
+**Cursor usage stats are captured automatically** (no self-reporting): [`src/cursor_db.py`](src/cursor_db.py) reads Cursor's local SQLite DB (`state.vscdb`, resolved per-OS) to populate `composer_id`, `model`, per-event model switches, and `tokens_in` / `tokens_out`. If Cursor isn't installed or the DB is absent, these degrade gracefully to `null` and the trace stays valid.
+
+<details>
+<summary>Trace file schema</summary>
+
+Stored at `.cursor/traces/<YYYYMMDD>/<session_id>/<HHMMSS>_<slug>.json`:
 
 ```json
 {
   "session": {
     "session_id": "a1b2c3d4",
-    "slug": "refactor_auth_clients",
-    "task": "Refactor all API clients to use the new token-based auth pattern",
+    "slug": "resilient_idempotent_checkout",
+    "task": "Make the checkout flow resilient and idempotent",
+    "adr_id": "ADR-0001",
     "started_at": "2026-05-09T14:32:01Z",
     "ended_at": "2026-05-09T15:14:32Z",
     "outcome": "completed",
-    "repo_snapshot": ["src/auth.py", "src/clients/github.py"],
+    "repo_snapshot": ["demo/resilience.py", "demo/clients/stripe.py"],
     "cursor_stats": {
+      "composer_id": "b7f3c1a0-…",
       "model": "claude-sonnet-4-5",
       "tool_call_count": 6,
       "tokens_in": 15000,
       "tokens_out": 4200
     }
   },
-  "events": [...]
+  "events": [
+    {
+      "step_id": "step_003",
+      "parent_step_id": "step_002",
+      "type": "decision",
+      "timestamp": "2026-05-09T14:33:45Z",
+      "reason": "charge() has no idempotency key; a retry double-charges. Route it through the transport.",
+      "files_read": ["demo/clients/stripe.py"],
+      "files_modified": ["demo/clients/stripe.py"],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    }
+  ]
 }
 ```
 
-**Each event** (appended by `append_trace`):
+Event types: `decision` · `file_read` · `file_modify` · `file_create` · `file_delete` · `tool_call` · `checkpoint`.
+</details>
+
+---
+
+## Wire it into Cursor
+
+**1. MCP server.** `.cursor/mcp.json` is committed, so Cursor auto-registers the tracer when you open the project:
 
 ```json
-{
-  "step_id": "step_003",
-  "parent_step_id": "step_002",
-  "type": "decision",
-  "timestamp": "2026-05-09T14:33:45Z",
-  "reason": "auth.py uses APIKeyAuth. Rewriting to BearerTokenAuth requires changing header construction in all downstream clients.",
-  "files_read": ["src/auth.py"],
-  "files_modified": ["src/clients/github.py"],
-  "files_created": [],
-  "files_deleted": [],
-  "notes": ""
-}
+{ "mcpServers": { "cursor-session-tracer": { "url": "http://127.0.0.1:8080/mcp" } } }
 ```
+> Cursor 0.43+. Older versions: use `"url": "http://127.0.0.1:8080/sse"`.
 
-**Event types:** `decision` · `file_read` · `file_modify` · `file_create` · `file_delete` · `tool_call` · `checkpoint`
+**2. Tracing rule.** `.cursor/rules/session_trace.mdc` tells the agent when to call the tools (any multi-file or architectural task). It's active automatically.
+
+**3. Adversarial review command** *(requires Cursor 1.6+ — custom commands)*. `.cursor/commands/design-review.md` is the `/design-review` command; Cursor discovers any Markdown file in `.cursor/commands/` and lists it when you type `/` in the agent chat. The 20+ expert personas live in `.cursor/review-council/` (deliberately *outside* `commands/`, so they don't show up as commands); the command reads them by path. See [`.cursor/review-council/README.md`](.cursor/review-council/README.md).
+
+**Installing into another repo:** copy `.cursor/` (the `mcp.json`, `rules/`, `commands/`, and `review-council/` folders) and `docs/adr/TEMPLATE.md` into the target project, and point its `.cursor/mcp.json` at your running tracer.
 
 ---
 
-## Rendering a Trace
+## The live demo
 
-```bash
-# Terminal tree (default)
-python render_trace.py --session 20260509/a1b2c3d4
+The bundled `demo/` app is a **naive checkout service** with a deliberate, dangerous flaw: `POST /checkout` charges via Stripe then writes a receipt via GitHub, with every call unguarded. It is **not idempotent** — retry a timed-out checkout and the customer is **charged twice**. There's no retry/backoff and no circuit breaker.
 
-# Full reason text without truncation
-python render_trace.py --session 20260509/a1b2c3d4 --verbose
+That's a decision worth reviewing, not just coding. The demo walks the full loop:
 
-# File touch summary only — useful for quick diff review
-python render_trace.py --session 20260509/a1b2c3d4 --files-only
+1. **Plan** — run `/design-review` on the checkout flow. The council (staff-engineer, appsec-architect, cloud-cost-architect, …) debates and converges: retries are unsafe before idempotency (a **blocker**), and backoff without jitter + a breaker causes a retry storm (a **converged concern**). It distils [**ADR-0001**](docs/adr/ADR-0001-resilient-idempotent-checkout.md) — full transcript in [`docs/design-review.md`](docs/design-review.md).
+2. **Path** — implement it in Cursor with the tracer running: `start_trace(..., adr_id="ADR-0001")`. Watch the trace populate in real time.
+3. **Check** — `audit_trace.py` verifies the implementation stayed inside the ADR's declared scope.
 
-# Mermaid diagram — saved to .cursor/traces/.../diagram.mermaid
-python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid
-
-# Mermaid with node cap (large sessions)
-python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid --max-nodes 20
-```
-
-**Example terminal output:**
-
-```bash
-SESSION a1b2c3d4 | refactor_auth_clients | started 14:32:01 | completed 15:14:32
-
-Session a1b2c3d4
-└── step_001 [decision]  14:32:18
-    reason: auth.py uses APIKeyAuth. Rewriting to BearerTokenAuth requires...
-    read:     src/auth.py
-    └── step_002 [file_modify]  14:33:45
-        reason: Replacing APIKeyAuth class with BearerTokenAuth...
-        read:     src/auth.py
-        modified: src/auth.py
-        └── step_003 [file_modify]  14:35:02
-            reason: github.py imports APIKeyAuth directly. Updating...
-            read:     src/clients/github.py
-            modified: src/clients/github.py
-```
+Full step-by-step with the exact commands: **[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)**.
 
 ---
 
-## API Endpoints
+## Rendering & auditing traces
 
-| Endpoint | Description |
-| --- | --- |
-| `GET /health` | Health check |
-| `GET /sessions` | List all recorded sessions as JSON |
-| `GET /docs` | FastAPI Swagger UI |
-| `* /mcp` | MCP streamable HTTP transport (Cursor 0.43+) |
-| `GET /sse` | MCP SSE transport (fallback) |
-
----
-
-## Screenshots
-
-### Cursor agent calling the MCP tools mid-session
-
-![Cursor chat — start_trace and append_trace](demo_screenshots/cursor-chat-snap-1.png)
-
-![Cursor chat — reasoning chain forming and completion](demo_screenshots/cursor-chat-snap-2.png)
-
-### Terminal tree output (`render_trace.py`)
-
-![render_trace CLI output](demo_screenshots/render-trace-cli.png)
-
-### Trace file — what gets written to disk
-
-![Trace file summary view](demo_screenshots/trace-file-summary.png)
-
-![Trace file — detailed event steps](demo_screenshots/trace-file-detailed-steps.png)
-
----
-
-## Running the Live Demo Yourself
-
-The repo ships with two demo app directories so you can run the full demo end-to-end without any setup beyond cloning.
-
-### What's in each directory
-
-| Directory | State | Purpose |
-| --- | --- | --- |
-| `demo/` | **Pre-refactor** — `APIKeyAuth` everywhere | Open this in Cursor as the starting point |
-| `demo_post_changes/` | **Post-refactor** — `BearerTokenAuth` everywhere | Reference: what the agent should produce |
-
-### Step-by-step
-
-**1. Clone and install**
+**Render a trace** as a terminal tree or a Mermaid diagram (PR-attachment ready):
 
 ```bash
-git clone <repo-url>
-cd cursor-session-tracer
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python render_trace.py --session 20260509/a1b2c3d4                 # terminal tree
+python render_trace.py --session 20260509/a1b2c3d4 --verbose       # full reason text
+python render_trace.py --session 20260509/a1b2c3d4 --files-only    # file touches only
+python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid  # → diagram.mermaid
 ```
 
-**2. Start the MCP server**
+**Audit plan vs. path** — the deterministic "independent reviewer". It reads the ADR's `Scope (files)` and diffs it against what the trace actually touched, flagging **LLD drift** (files changed but never planned):
 
 ```bash
-./run_server.sh
-# server starts on http://127.0.0.1:8080
+python audit_trace.py --session 20260509/a1b2c3d4          # resolves the ADR from the trace's adr_id
+python audit_trace.py --session 20260509/a1b2c3d4 --json   # PR-comment / CI gate (exit 1 on drift)
+# or: make audit SESSION=20260509/a1b2c3d4
 ```
-
-**3. Open `demo/` in Cursor**
-
-```bash
-cursor .
-```
-
-Cursor will auto-load `.cursor/mcp.json` and register the tracer. Confirm the MCP server shows as connected in Cursor → Settings → MCP.
-
-**4. Give the agent this task**
 
 ```text
-Refactor all API clients in this codebase to use the new BearerTokenAuth
-pattern from demo/auth.py instead of APIKeyAuth. Update demo/main.py,
-demo/clients/github.py, and demo/clients/stripe.py. Make sure the
-get_current_auth() function also returns the new auth type.
+──────────────── Plan vs. Path — DRIFT DETECTED ────────────────
+✓ Implemented in scope (1/4):  demo/resilience.py
+○ Planned but not touched (3): demo/clients/github.py, demo/clients/stripe.py, demo/main.py
+✗ LLD DRIFT — changed but not in the ADR (1):
+    demo/auth.py  ← reviewer should ask why
 ```
-
-The agent will call `start_trace` → several `append_trace` calls → `end_trace`. Watch the trace file populate in real time:
-
-```bash
-# macOS (no watch by default)
-while true; do clear; find .cursor/traces -name '*.json' | sort; sleep 1; done
-
-# Linux / after brew install watch
-watch -n 1 "find .cursor/traces -name '*.json' | sort"
-```
-
-**5. Render the trace**
-
-```bash
-python render_trace.py --session YYYYMMDD/<session_id>
-# find the date/session_id from the path printed above
-```
-
-**6. Compare against the reference output**
-
-```bash
-# Verify the agent's changes match the expected post-refactor state
-diff <(python3 -c "import demo.auth as a; print(type(a.get_current_auth()).__name__)") \
-     <(echo "BearerTokenAuth")
-```
-
-**7. Run the tests to verify correctness**
-
-```bash
-.venv/bin/python -m pytest tests/ -v
-# 101 tests — pre-refactor state, post-refactor state, MCP tools, renderer
-```
-
-> See [DEMO-RUNBOOK.md](DEMO-RUNBOOK.md) for the demo execution steps, fallback steps, and troubleshooting.
 
 ---
 
-## Running Tests
+## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -v
+make test        # or: .venv/bin/python -m pytest tests/ -q
 ```
 
-101 tests across five files:
-
-| File | Coverage |
-| --- | --- |
-| `tests/test_demo.py` | `demo/` pre-refactor state — `APIKeyAuth` in all clients, correct headers, HTTP endpoints |
-| `tests/test_demo_post_changes.py` | `demo_post_changes/` post-refactor state — `BearerTokenAuth` throughout, symmetry check vs pre |
-| `tests/test_file_utils.py` | Slug generation, path resolution, JSON read/write, step ID sequencing |
-| `tests/test_mcp_tools.py` | All three MCP tools, Cursor stats tracking, full session lifecycle |
-| `tests/test_render_trace.py` | Tree builder, orphan handling, Mermaid renderer, CLI smoke test |
-
-The symmetry test (`test_pre_and_post_header_keys_differ`) acts as a canary: if `demo/` is accidentally left in the post-refactor state before a talk, the test fails immediately.
+Validated on **Python 3.12**. Coverage spans the file utilities, all three MCP tools (incl. `adr_id` linking), the cross-platform Cursor-DB reader, both renderers, the plan-vs-path audit, and a canary suite over the demo's starting state (`tests/test_demo.py` fails loudly if `demo/` is accidentally left in the post-implementation state before a talk).
 
 ---
 
-## Project Structure
+## Roadmap / future scope
+
+**Where this is today:** a working, local, single-developer system. The trace, the ADR
+pipeline (`/design-review`), and the plan-vs-path audit all run on your machine against a
+flat-file trace store — no server infrastructure, no account, no external dependencies.
+That's deliberate: it has to work in one repo on one laptop before it works at org scale.
+
+**Where it goes next** is turning that single-developer loop into a team-scale one — a
+shared trace store you can query across sessions, and a CI gate that enforces plan-vs-path
+on every PR. Those are the items below, and they're where contributions go furthest:
+
+- **Pluggable graph/analytics trace store (the next logical step).** The JSON schema is deliberately graph-shaped: every event is a node, `parent_step_id` is a directed edge, each file reference is an edge to a file node. The natural evolution is a **pluggable backend** so traces flow into:
+  - **Neo4j** — reasoning-graph queries: `(Step)-[:CAUSED]->(Step)`, `(Step)-[:TOUCHED]->(File)`; "which decision patterns precede prod failures", "which files do agents touch most across sessions".
+  - **ClickHouse** — columnar analytics across thousands of sessions: agentic-debt trends, token/latency distributions, drift rates per team.
+
+  We'd love contributions here — a `TraceStore` interface with a flat-file default and Neo4j / ClickHouse implementations. Open an issue to coordinate.
+- **Per-session cost capture.** Cursor's local DB gives token counts but not dollar cost; deriving `cost_usd` needs a maintained `model → price` map (and per-provider nuances). Dropped for now to avoid a stale price table — **contributions welcome** to add an opt-in pricing map so `cursor_stats` can carry cost.
+- **CI integration.** Wire `audit_trace.py --json` into a PR check that comments the plan-vs-path report and gates on LLD drift.
+- **Agentic reviewer.** The audit tool supplies the ground-truth planned-vs-actual diff; layer an agent on top to judge *semantic* faithfulness (did the change honour the ADR's intent, not just its file list).
+
+---
+
+## Project structure
 
 ```text
 cursor-session-tracer/
 ├── src/
 │   ├── file_utils.py            # slug gen, path resolver, JSON read/write
+│   ├── cursor_db.py             # reads Cursor's SQLite (state.vscdb), cross-platform
 │   ├── mcp_server.py            # FastMCP — start_trace, append_trace, end_trace
 │   └── app.py                   # FastAPI app, mounts MCP, exposes /sessions
-├── demo/                        # PRE-refactor demo app — open this in Cursor
-│   ├── auth.py                  # get_current_auth() returns APIKeyAuth ← agent changes this
-│   ├── main.py
-│   └── clients/
-│       ├── github.py            # uses APIKeyAuth ← agent changes this
-│       └── stripe.py            # uses APIKeyAuth ← agent changes this
-├── demo_post_changes/           # POST-refactor reference — expected end state
-│   ├── auth.py                  # get_current_auth() returns BearerTokenAuth
-│   ├── main.py
-│   └── clients/
-│       ├── github.py            # uses BearerTokenAuth
-│       └── stripe.py            # uses BearerTokenAuth
-├── tests/
-│   ├── test_demo.py             # asserts demo/ is correct pre-refactor state
-│   ├── test_demo_post_changes.py# asserts demo_post_changes/ is correct post-refactor state
-│   ├── test_file_utils.py
-│   ├── test_mcp_tools.py
-│   └── test_render_trace.py
 ├── render_trace.py              # terminal tree + Mermaid renderer
+├── audit_trace.py               # plan-vs-path: audit a trace against its ADR's scope
+├── demo/                        # NAIVE checkout service — the live-demo target
+│   ├── auth.py                  # BearerTokenAuth (auth is already solved)
+│   ├── main.py                  # POST /checkout — not idempotent (double-charge bug)
+│   └── clients/{stripe,github}.py  # unguarded outbound calls
+├── docs/
+│   ├── adr/                     # Architecture Decision Records — the PLAN half
+│   │   ├── README.md            # the plan-vs-path model
+│   │   ├── TEMPLATE.md          # ADR template (machine-readable Scope section)
+│   │   └── ADR-0001-resilient-idempotent-checkout.md
+│   └── design-review.md         # full adversarial-review transcript (ADR-0001's lineage)
 ├── .cursor/
 │   ├── mcp.json                 # Cursor MCP registration (auto-loaded)
-│   ├── rules/
-│   │   └── session_trace.mdc   # Cursor rule — tells agent when to trace
-│   └── traces/                  # auto-generated at runtime — gitignored
-│       └── 20260509/            # date of session (YYYYMMDD)
-│           └── d80b1595/        # session_id (uuid4[:8])
-│               └── 061855_refactor_demo_api_clients_to.json  # HHMMSS_<slug>.json
-├── demo_screenshots/            # screenshots from a live demo run
-│   ├── cursor-chat-snap-1.png   # agent calling start_trace in Cursor chat
-│   ├── cursor-chat-snap-2.png   # agent calling append_trace mid-session
-│   ├── render-trace-cli.png     # render_trace.py terminal tree output
-│   ├── trace-file-summary.png   # trace JSON — session header view
-│   └── trace-file-detailed-steps.png  # trace JSON — events array view
-├── DEMO-RUNBOOK.md              # step-by-step demo guide for the talk
-├── requirements.txt
-└── run_server.sh
+│   ├── rules/session_trace.mdc  # rule — tells the agent when to trace
+│   ├── commands/design-review.md# the /design-review command
+│   ├── review-council/          # adversarial-review personas + protocol
+│   └── traces/                  # trace files, written at runtime
+├── tests/                       # pytest suite (Python 3.12)
+├── Makefile                     # setup / test / server / audit
+├── DEMO-RUNBOOK.md              # step-by-step live-demo guide
+└── requirements.txt
 ```
 
 ---
 
-## Cursor Usage Stats
+## Contributing
 
-Cursor usage stats are captured automatically per session and stored in the trace:
+Issues and PRs welcome — see [Roadmap](#roadmap--future-scope) for where help goes furthest. Please run `make test` before opening a PR. If your change is architectural, dogfood the tool: run `/design-review` to produce an ADR, implement with the tracer running, and attach the trace + `audit_trace.py` output to your PR.
 
-- `tool_call_count` — auto-incremented on every `append_trace` call
-- `model`, `tokens_in`, `tokens_out` — required at `end_trace` (cost is derivable from model + token counts)
+## License
 
-This makes **agentic debt measurable**: sessions where the agent completed a task but left orphaned decisions, skipped checkpoints, or ran significantly over token budget are leading indicators of future maintenance cost.
-
----
-
-## Future: Graph DB Migration
-
-The JSON schema is deliberately graph-shaped. `parent_step_id` is a directed edge. Migrating to Neo4j at org scale requires:
-
-1. An ingestion script that reads all session JSON files and writes nodes and edges
-2. Cypher schema: `(Step)-[:CAUSED]->(Step)`, `(Step)-[:TOUCHED]->(File)`
-3. Cross-session queries: which files agents touch most, which decision patterns precede prod failures
+[MIT](LICENSE) © Indranil Chandra
