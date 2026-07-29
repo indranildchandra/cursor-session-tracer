@@ -90,10 +90,10 @@ HLD already has a home for its "why" — the ADR. The **LLD layer has had none**
 
 ```
   /design-review            start_trace(adr_id=…)          audit_trace.py
- ┌──────────────┐  ADR    ┌──────────────────┐  trace   ┌──────────────────┐
- │ adversarial   │ ─────▶ │ implement with    │ ───────▶ │ plan vs. path:    │
- │ review council│  plan   │ the tracer running │  path    │ flag LLD drift    │
- └──────────────┘         └──────────────────┘          └──────────────────┘
+ ┌────────────────┐  ADR    ┌──────────────────────┐  trace   ┌──────────────────┐
+ │ adversarial    │ ─────▶  │ implement with       │ ───────▶ │ plan vs. path:   │
+ │ review council │  plan   │ the tracer running   │  path    │ flag LLD drift   │
+ └────────────────┘         └──────────────────────┘          └──────────────────┘
 ```
 
 A PR then ships as **code + ADR + trace** — and the reviewer, human or agent, gets the full context instead of reverse-engineering intent from the diff. See [`docs/adr/README.md`](docs/adr/README.md) for the full model.
