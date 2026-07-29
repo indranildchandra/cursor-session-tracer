@@ -44,7 +44,6 @@
 
 ## Table of contents
 
-- [At a glance](#at-a-glance)
 - [Why](#why)
 - [The two-artifact model: plan vs. path](#the-two-artifact-model-plan-vs-path)
 - [Quickstart](#quickstart)
