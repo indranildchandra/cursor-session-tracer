@@ -244,7 +244,7 @@ python audit_trace.py  --session $(date +%Y%m%d)/<SESSION_ID> --json | jq .
 | Port 8080 in use | change the port in `make server` / `.cursor/mcp.json` to match |
 | `glow` / `jq` / `watch` not found | run `make setup-tools` or `brew install glow watch jq` |
 
----
+## Post-demo URLs
 
 ## Quick reference — all commands (copy-paste)
 
