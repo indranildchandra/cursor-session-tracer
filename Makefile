@@ -18,14 +18,41 @@ $(BIN)/python: ## Create the virtualenv
 	$(PYTHON) -m venv $(VENV)
 	$(BIN)/pip install --upgrade pip
 
+.PHONY: setup-tools
+setup-tools: ## Install demo CLI tools (glow, watch, jq) via Homebrew
+	@if command -v brew >/dev/null 2>&1; then \
+		brew install glow watch jq; \
+	else \
+		echo "Homebrew not found — install glow, watch, and jq manually for the demo."; \
+	fi
+
 .PHONY: setup
-setup: $(BIN)/python ## Create venv (Python 3.12) and install dependencies
+setup: $(BIN)/python setup-tools ## Create venv (Python 3.12), install deps, and demo CLI tools
 	$(BIN)/pip install -r requirements.txt
 	@echo "\nSetup complete. Activate with:  source $(VENV)/bin/activate"
+
+.PHONY: dev
+dev: $(BIN)/python ## Install dev + CI tooling (ruff, pytest-cov)
+	$(BIN)/pip install -r requirements-dev.txt
 
 .PHONY: test
 test: ## Run the test suite
 	$(BIN)/python -m pytest tests/ -q
+
+.PHONY: cov
+cov: ## Run the suite with a coverage report (terminal + HTML in htmlcov/)
+	$(BIN)/python -m pytest tests/ \
+		--cov=src --cov=render_trace --cov=audit_trace \
+		--cov-report=term-missing --cov-report=html
+	@echo "\nHTML coverage report: open htmlcov/index.html"
+
+.PHONY: lint
+lint: ## Lint with ruff (needs: make dev)
+	$(BIN)/ruff check .
+
+.PHONY: format
+format: ## Auto-format with ruff (needs: make dev)
+	$(BIN)/ruff format .
 
 .PHONY: server
 server: ## Start the MCP + FastAPI server on http://127.0.0.1:8080

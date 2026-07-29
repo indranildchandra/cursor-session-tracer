@@ -17,7 +17,7 @@ I'll follow ADR-0001. First I'll open it to confirm scope and the ordering const
 
 → `start_trace(task_description="Implement resilient idempotent checkout",
 files_in_scope=["demo/resilience.py","demo/clients/stripe.py","demo/clients/github.py","demo/main.py"],
-adr_id="ADR-0001")` → session `a1b2c3d4`.
+adr_id="ADR-0001")` → session `dde097e6`.
 
 Creating the transport. The order matters: apply the `order_id`-derived idempotency key,
 short-circuit an already-succeeded key, then run the bounded retry loop with full jitter,
@@ -42,12 +42,12 @@ Routing the receipt call through the same transport for consistent backoff, then
 
 Tests pass, including the deterministic backoff/dedupe/breaker cases. Closing the trace.
 
-→ `end_trace(session_id="a1b2c3d4", outcome="completed")` — model and token counts read from
+→ `end_trace(session_id="dde097e6", outcome="completed")` — model and token counts read from
 Cursor's local DB automatically.
 
 ## After the session
 
 ```bash
-python render_trace.py --session <date>/a1b2c3d4     # header shows: implements: ADR-0001
-python audit_trace.py  --session <date>/a1b2c3d4     # Plan vs. Path — FAITHFUL (all touches in scope)
+python render_trace.py --session 20260729/dde097e6     # header shows: implements: ADR-0001
+python audit_trace.py  --session 20260729/dde097e6     # Plan vs. Path — FAITHFUL (all touches in scope)
 ```

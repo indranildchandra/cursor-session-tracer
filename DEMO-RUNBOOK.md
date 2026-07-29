@@ -7,6 +7,8 @@
 
 The demo walks one loop on a deliberately broken app: **adversarial review → ADR → implement with tracing → audit plan vs. path.**
 
+**Terminal layout:** you need three terminals — (1) `make server`, (2) `watch …` during implementation, (3) everything else (curl, glow, render, audit, python).
+
 ---
 
 ## 0. Pre-demo setup (do this before you present)
@@ -17,7 +19,9 @@ The demo walks one loop on a deliberately broken app: **adversarial review → A
 git clone https://github.com/indranildchandra/cursor-session-tracer
 cd cursor-session-tracer
 make setup        # macOS: make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+                  # also installs demo CLI tools via Homebrew: glow, watch, jq
 make test         # expect all green
+source .venv/bin/activate   # optional — or use .venv/bin/python throughout
 ```
 
 ### Start the tracer server
@@ -25,7 +29,8 @@ make test         # expect all green
 ```bash
 make server       # http://127.0.0.1:8080  — leave this terminal running
 # verify:
-curl http://127.0.0.1:8080/health          # {"status":"ok","service":"cursor-session-tracer"}
+curl http://127.0.0.1:8080/health | jq .
+curl http://127.0.0.1:8080/sessions | jq .
 ```
 
 ### Point Cursor at the server
@@ -52,7 +57,7 @@ watch -n 1 "find .cursor/traces -name '*.json' | sort"
 
 ---
 
-## 1. Set the scene — the broken app (≈1 min)
+## 1. Set the premise — the broken app
 
 > "This is a checkout service. `POST /checkout` charges the customer, then writes a receipt. Every call is made directly — no idempotency, no retries, no circuit breaker."
 
@@ -72,7 +77,7 @@ EOF
 
 ---
 
-## 2. Plan — run the adversarial review (≈3–5 min)
+## 2. Plan — run the adversarial review
 
 **Option A — run it live.** In the Cursor agent chat:
 
@@ -84,18 +89,18 @@ Narrate as the council forms: independent personas (staff-engineer, appsec-archi
 
 > "Two things the council caught that a single reviewer might not. One — a **blocker**: you cannot add retries before idempotency, or you turn a manual double-charge into an automatic one. Two — a **converged concern**: backoff without jitter plus no circuit breaker is a retry storm during an outage. Both go into the ADR."
 
-**Option B — if you're tight on time, show the pre-baked artefacts:**
+**Option B — if you're tight on time / with no internet connectivity, show the pre-baked artifacts:**
 
 ```bash
-sed -n '1,40p' docs/adr/ADR-0001-resilient-idempotent-checkout.md   # the decision
-sed -n '1,30p' docs/design-review.md                                # the transcript it came from
+glow docs/adr/ADR-0001-resilient-idempotent-checkout.md   # the decision
+glow docs/design-review.md                                # the transcript it came from
 ```
 
 > "The full debate is in `design-review.md`. The **ADR is the distilled decision** — context, the decision, the scope of files it touches, alternatives rejected, and the verdict. That `Scope (files)` list is a machine contract; you'll see why in a second."
 
 ---
 
-## 3. Path — implement with the tracer running (≈4 min)
+## 3. Path — implement with the tracer running
 
 Give the agent the task, telling it which ADR it implements:
 
@@ -113,15 +118,20 @@ Point at the right pane:
 When it finishes, it calls `end_trace`. Then render the reasoning chain:
 
 ```bash
-# grab the session path from the right pane, then:
+# grab the session path from the watch pane, then:
 python render_trace.py --session <YYYYMMDD>/<session_id>
+python render_trace.py --session <YYYYMMDD>/<session_id> --verbose      # full reason text
+python render_trace.py --session <YYYYMMDD>/<session_id> --files-only   # file touches only
+python render_trace.py --session <YYYYMMDD>/<session_id> --mode mermaid # → creates a diagram.mermaid file
 ```
+
+> Use `20260729/dde097e6` only for an offline rehearsal with the committed sample trace.
 
 > "Header says `implements: ADR-0001`. A reviewer gets this reasoning chain up front instead of reverse-engineering it from the diff."
 
 ---
 
-## 4. Check — plan vs. path (≈2 min)
+## 4. Check — plan vs. path
 
 ```bash
 python audit_trace.py --session <YYYYMMDD>/<session_id>
@@ -135,10 +145,32 @@ Now show the failure mode — a change that wandered outside the plan:
 > "If the agent had also edited, say, `demo/auth.py` — a file the ADR never scoped — the audit flags it as **LLD drift**, exits non-zero, and that becomes a PR comment. `--json` makes it a CI gate."
 
 ```bash
-python audit_trace.py --session <YYYYMMDD>/<session_id> --json   # exit 1 on drift
+python audit_trace.py --session <YYYYMMDD>/<session_id> --json | jq .   # exit 1 on drift; CI/PR gate
 ```
 
+> "Same verdict, machine-readable — wire this into a PR check. `faithful: true`, four files implemented, zero drift."
+
 > "So a PR of the future ships as **code + ADR + trace**. The reviewer — human or agent — has the plan, the path, and an automatic check that they match."
+
+---
+
+## 5. Prove the fix — idempotent checkout
+
+After implementation, show the double-charge bug is closed:
+
+```bash
+.venv/bin/python - <<'EOF'
+from fastapi.testclient import TestClient
+from demo.main import app
+c = TestClient(app)
+payload = {"customer_id": "cus_1", "amount_cents": 5000, "order_id": "o-1"}
+a = c.post("/checkout", json=payload).json()
+b = c.post("/checkout", json=payload).json()
+print(a["charge"]["id"], b["charge"]["id"], "→ deduped:", a["charge"]["id"] == b["charge"]["id"])
+EOF
+```
+
+> "Same `order_id`, same charge id — the retry dedupes instead of double-charging."
 
 ---
 
@@ -148,7 +180,7 @@ Drive the tools directly to show the data model (this is current, tested code):
 
 ```bash
 .venv/bin/python - <<'EOF'
-import sys; sys.path.insert(0, ".")
+import json, sys; sys.path.insert(0, ".")
 from src.mcp_server import start_trace, append_trace, end_trace
 
 r0 = start_trace(
@@ -157,7 +189,7 @@ r0 = start_trace(
                     "demo/clients/github.py", "demo/main.py"],
     adr_id="ADR-0001",
 )
-print("Started:", r0)
+print(json.dumps({"started": r0}, indent=2))
 
 r1 = append_trace(
     session_id=r0["session_id"], type="file_create",
@@ -172,13 +204,14 @@ r2 = append_trace(
     files_created=[], files_deleted=[], parent_step_id=r1["step_id"],
 )
 # model / tokens are auto-read from Cursor's local DB; nothing to pass here.
-print("Ended:", end_trace(session_id=r0["session_id"], outcome="completed"))
-print("Session:", r0["session_id"])
+ended = end_trace(session_id=r0["session_id"], outcome="completed")
+print(json.dumps({"ended": ended, "session_id": r0["session_id"]}, indent=2))
 EOF
 
 # then render + audit (find the date/session_id from the output above):
 python render_trace.py --session $(date +%Y%m%d)/<SESSION_ID>
 python audit_trace.py  --session $(date +%Y%m%d)/<SESSION_ID>
+python audit_trace.py  --session $(date +%Y%m%d)/<SESSION_ID> --json | jq .
 ```
 
 ---
@@ -209,10 +242,101 @@ python audit_trace.py  --session $(date +%Y%m%d)/<SESSION_ID>
 | `render`/`audit` can't find session | use the actual `<date>/<session_id>` from `find .cursor/traces -name '*.json'` |
 | Tokens/model show null | Auto-capture needs a live Cursor session on the machine (macOS/Linux/Windows path). Expected when run outside Cursor. |
 | Port 8080 in use | change the port in `make server` / `.cursor/mcp.json` to match |
+| `glow` / `jq` / `watch` not found | run `make setup-tools` or `brew install glow watch jq` |
 
 ## Post-demo URLs
 
-- `http://127.0.0.1:8080/health` — health
-- `http://127.0.0.1:8080/sessions` — all sessions as JSON (includes `adr_id`)
+## Quick reference — all commands (copy-paste)
+
+Use three terminals: **T1** = server · **T2** = watch (during step 3) · **T3** = everything below.
+
+### Setup (once, T3)
+
+```bash
+make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+make test
+source .venv/bin/activate   # optional
+```
+
+### Server (T1 — leave running)
+
+```bash
+make server
+curl http://127.0.0.1:8080/health | jq .
+curl http://127.0.0.1:8080/sessions | jq .
+```
+
+### The bug (T3)
+
+```bash
+.venv/bin/python -c "from demo.clients.stripe import StripeClient as S; c=S(); c.charge('cus',5000); c.charge('cus',5000); print('charges:', len(c.charges))"
+```
+
+### Cursor prompts
+
+**Plan** — live review (Option A) or skip to `glow` below (Option B):
+
+```
+/design-review the checkout flow in demo/ — Stripe charge + GitHub receipt, currently unguarded
+```
+
+**Pre-baked plan artifacts (T3, Option B or after live review):**
+
+```bash
+glow docs/design-review.md
+glow docs/adr/ADR-0001-resilient-idempotent-checkout.md
+```
+
+**Watch traces (T2 — start before implement):**
+
+```bash
+watch -n 1 "find .cursor/traces -name '*.json' | sort"
+```
+
+**Path — implement (Cursor chat):**
+
+```
+Implement ADR-0001. Create demo/resilience.py with an idempotency key applied before a
+retry loop (exponential backoff + full jitter, transient failures only) behind a
+per-dependency circuit breaker, and route StripeClient.charge and
+GitHubClient.create_receipt_issue through it. Start a trace with adr_id="ADR-0001".
+```
+
+### Render, audit, and verify (T3)
+
+Replace `<YYYYMMDD>/<session_id>` with the session from T2, **or** use the committed sample for rehearsal:
+
+```bash
+SESSION=20260729/dde097e6   # sample trace — swap for your live session after implement
+
+python render_trace.py --session $SESSION
+python render_trace.py --session $SESSION --verbose
+python render_trace.py --session $SESSION --files-only
+python render_trace.py --session $SESSION --mode mermaid
+python audit_trace.py  --session $SESSION
+python audit_trace.py  --session $SESSION --json | jq .
+jq . .cursor/traces/20260729/dde097e6/092435_implement_adr0001_resilient_idempotent_outbound.json
+
+.venv/bin/python - <<'EOF'
+from fastapi.testclient import TestClient
+from demo.main import app
+c = TestClient(app)
+payload = {"customer_id": "cus_1", "amount_cents": 5000, "order_id": "o-1"}
+a = c.post("/checkout", json=payload).json()
+b = c.post("/checkout", json=payload).json()
+print(a["charge"]["id"], b["charge"]["id"], "→ deduped:", a["charge"]["id"] == b["charge"]["id"])
+EOF
+```
+
+### Post-demo links
+
+```bash
+curl http://127.0.0.1:8080/health | jq .
+curl http://127.0.0.1:8080/sessions | jq .
+glow docs/adr/ADR-0001-resilient-idempotent-checkout.md
+glow docs/design-review.md
+```
+
 - `http://127.0.0.1:8080/docs` — FastAPI Swagger UI
-- `docs/adr/ADR-0001-resilient-idempotent-checkout.md` — the plan · `docs/design-review.md` — the transcript
+- `.cursor/traces/20260729/dde097e6/` — committed sample trace (`render_trace.py` / `audit_trace.py` work offline against it)
+- `demo_screenshots/` — screenshots from the same run (see [README.md](README.md#screenshots))

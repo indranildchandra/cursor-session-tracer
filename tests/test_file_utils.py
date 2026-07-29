@@ -3,14 +3,13 @@ Unit tests for src/file_utils.py
 """
 
 import json
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 # Make src importable without install
 import sys
+from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.file_utils import (
@@ -20,10 +19,8 @@ from src.file_utils import (
     next_step_id,
     now_iso,
     read_trace,
-    resolve_trace_path,
     write_trace,
 )
-
 
 # ---------------------------------------------------------------------------
 # generate_session_id
@@ -95,7 +92,7 @@ def test_next_step_id_zero_padded():
 
 def test_now_iso_format():
     ts = now_iso()
-    from datetime import datetime, timezone
+    from datetime import datetime
     parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
     assert parsed is not None
 
