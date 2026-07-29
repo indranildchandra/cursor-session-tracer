@@ -57,6 +57,7 @@ async def list_sessions():
                     "session_id": sess.get("session_id"),
                     "slug": sess.get("slug"),
                     "task": sess.get("task"),
+                    "adr_id": sess.get("adr_id"),
                     "started_at": sess.get("started_at"),
                     "ended_at": sess.get("ended_at"),
                     "outcome": sess.get("outcome"),

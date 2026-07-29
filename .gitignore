@@ -112,12 +112,18 @@ dist
 # TernJS port file
 .tern-port
 
-.claude/
+# Ignore local Claude scaffolding, but ship the review-council skill (a deliverable)
+.claude/*
+!.claude/skills/
 .pytest_cache/
 .venv/
 tasks/
 audit/
-docs/
+# Ignore local AIDLC working docs, but ship ADRs + the design-review transcript.
+# These are the "plan" artifacts that travel with the PR — see docs/adr/README.md.
+docs/*
+!docs/adr/
+!docs/design-review.md
 **/__pycache__/
 **.pyc
 DESIGN-PLAN.md

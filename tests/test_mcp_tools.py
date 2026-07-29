@@ -96,6 +96,23 @@ def test_start_trace_no_cursor_db(monkeypatch):
     assert stats["composer_id"] is None
 
 
+def test_start_trace_adr_id_none_by_default():
+    result = start_trace("Task with no ADR", ["src/x.py"])
+    data = json.loads(Path(result["trace_file_path"]).read_text())
+    assert data["session"]["adr_id"] is None
+
+
+def test_start_trace_links_adr_id():
+    """When an adr_id is passed, the trace records which ADR it implements."""
+    result = start_trace(
+        "Implement bearer token auth",
+        ["demo/auth.py"],
+        adr_id="ADR-0001",
+    )
+    data = json.loads(Path(result["trace_file_path"]).read_text())
+    assert data["session"]["adr_id"] == "ADR-0001"
+
+
 # ---------------------------------------------------------------------------
 # append_trace
 # ---------------------------------------------------------------------------

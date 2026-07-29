@@ -45,10 +45,13 @@ mcp = FastMCP(
         "Start a new agentic session trace. Call this at the beginning of any task "
         "touching more than 2 files or involving architectural changes. "
         "Store the returned session_id — you need it for every subsequent call. "
-        "Model name and Cursor session ID are captured automatically from Cursor's local DB."
+        "Model name and Cursor session ID are captured automatically from Cursor's local DB. "
+        "If this work implements a decision recorded in an ADR (Architecture Decision "
+        "Record produced by the review-council / adversarial review), pass its adr_id so "
+        "the trace (what you did) links back to the ADR (what was planned)."
     )
 )
-def start_trace(task_description: str, files_in_scope: list[str]) -> dict:
+def start_trace(task_description: str, files_in_scope: list[str], adr_id: str = "") -> dict:
     """
     Creates the trace file and writes the session header.
     Model and composer_id are auto-detected from Cursor's SQLite DB.
@@ -56,6 +59,8 @@ def start_trace(task_description: str, files_in_scope: list[str]) -> dict:
     Args:
         task_description: Full description of the task being performed.
         files_in_scope: List of files expected to be touched in this session.
+        adr_id: Optional ID of the ADR this session implements (e.g. "ADR-0001").
+                Links the implementation trace back to the planning artifact.
 
     Returns:
         {"session_id": str, "trace_file_path": str}
@@ -78,6 +83,7 @@ def start_trace(task_description: str, files_in_scope: list[str]) -> dict:
             "session_id": session_id,
             "slug": slug,
             "task": task_description,
+            "adr_id": adr_id or None,
             "started_at": started_at,
             "ended_at": None,
             "outcome": None,

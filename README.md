@@ -4,7 +4,9 @@ Agentic observability for Cursor. Logs agent decisions, file touches, and reason
 
 Built for the talk **"When the Agent Drives, Who Holds the Wheel?"** — Cursor Community Meetup Mumbai, May 2026.
 
-[Talk Deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/view) · [Design Plan](DESIGN-PLAN.md) · [Demo Runbook](DEMO-RUNBOOK.md)
+[Talk Deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/view) · [Design Plan](DESIGN-PLAN.md) · [Demo Runbook](DEMO-RUNBOOK.md) · [ADRs](docs/adr/) · [review-council skill](.claude/skills/review-council/)
+
+> **Two artefacts, one system.** A trace on its own tells you what the agent *did*. Pair it with an **ADR** — the decision-of-record produced by an [adversarial review](.claude/skills/review-council/) *before* implementation — and you get **plan vs. path**: what was decided and why, next to what actually happened, with [`audit_trace.py`](audit_trace.py) checking one stayed faithful to the other. Docs drift; these move with the code. See [Plan vs. Path](#plan-vs-path-adr--trace).
 
 ---
 
@@ -27,6 +29,40 @@ Three MCP tools integrate into Cursor's agentic loop:
 | `end_trace` | Task complete or stopped | Writes `ended_at`, outcome, and Cursor usage stats |
 
 Every event has a `parent_step_id` pointer. That's what makes the trace a graph, not a log — the reasoning chain is directional and queryable.
+
+---
+
+## Plan vs. Path: ADR + Trace
+
+On long-lived brownfield projects the `docs/` folder is written once and never kept honest — the code moves on, the docs don't. The fix isn't more discipline; it's making the record a **byproduct of the work** instead of a separate artefact nobody updates. Two byproducts, two moments:
+
+| Artefact | Produced when | By what | Answers | Lives in |
+| --- | --- | --- | --- | --- |
+| **ADR** (the plan) | *before* implementation | [`review-council`](.claude/skills/review-council/) — adversarial review by 3–6 expert personas | *What did we decide, and why?* | [`docs/adr/`](docs/adr/) |
+| **Trace** (the path) | *during* implementation | the three MCP tools above | *What did the agent actually do?* | `.cursor/traces/` |
+
+HLD already has a home for its "why" — the ADR. The **LLD layer has had no equivalent**: what happened inside a module, why a function was refactored, what the agent decided mid-session. The trace is that missing LLD record, and `adr_id` ties it back to the plan.
+
+**The loop:**
+
+1. **Plan.** Run the adversarial review (`/design-review`). The council debates, converges on a verdict, and distils it into an ADR — including a machine-readable `## Scope (files)` list. (Full transcript lands in [`docs/design-review.md`](docs/design-review.md); the ADR is the distilled decision.)
+2. **Path.** Implement. Pass the ADR id to the tracer: `start_trace(..., adr_id="ADR-0001")`. The trace now declares which plan it executes.
+3. **Check.** `audit_trace.py` reads both and flags **LLD drift** — files the trace changed that the ADR never scoped:
+
+```bash
+python audit_trace.py --session 20260509/a1b2c3d4            # resolves the ADR from the trace's adr_id
+python audit_trace.py --session 20260509/a1b2c3d4 --json     # PR-comment / CI gate (exit 1 on drift)
+```
+
+```text
+──────────────── Plan vs. Path — DRIFT DETECTED ────────────────
+✓ Implemented in scope (1/4):  demo/auth.py
+○ Planned but not touched (3): demo/clients/github.py, demo/clients/stripe.py, demo/main.py
+✗ LLD DRIFT — changed but not in the ADR (1):
+    demo/logging_config.py  ← reviewer should ask why
+```
+
+This is **the PR review of the future**: a PR ships as *code + ADR + trace*, and the reviewer — human or agent — gets the full context (what was planned, what was decided during implementation, what changed) instead of reverse-engineering intent from the diff. See [`docs/adr/README.md`](docs/adr/README.md) for the full model.
 
 ---
 
@@ -326,9 +362,21 @@ cursor-session-tracer/
 │   ├── test_demo.py             # asserts demo/ is correct pre-refactor state
 │   ├── test_demo_post_changes.py# asserts demo_post_changes/ is correct post-refactor state
 │   ├── test_file_utils.py
-│   ├── test_mcp_tools.py
+│   ├── test_mcp_tools.py        # MCP tools incl. adr_id linking
+│   ├── test_cursor_db.py        # Cursor SQLite auto-capture (cross-platform)
+│   ├── test_audit_trace.py      # plan-vs-path drift audit
 │   └── test_render_trace.py
 ├── render_trace.py              # terminal tree + Mermaid renderer
+├── audit_trace.py               # plan-vs-path: audit a trace against its ADR's scope
+├── docs/
+│   ├── adr/                     # Architecture Decision Records — the PLAN half
+│   │   ├── README.md            # the plan-vs-path model
+│   │   ├── TEMPLATE.md          # ADR template (machine-readable Scope section)
+│   │   └── ADR-0001-bearer-token-auth.md   # demo decision, distilled from the review
+│   └── design-review.md         # full adversarial-review transcript (ADR-0001's lineage)
+├── .claude/
+│   └── skills/
+│       └── review-council/      # adversarial review → emits the ADR (/design-review)
 ├── .cursor/
 │   ├── mcp.json                 # Cursor MCP registration (auto-loaded)
 │   ├── rules/

@@ -80,6 +80,9 @@ def render_terminal(data: dict, verbose: bool, files_only: bool, file_label: str
     console.rule(f"[bold cyan]{file_label}[/bold cyan]")
     console.print(f"[bold]{header}[/bold]")
 
+    if sess.get("adr_id"):
+        console.print(f"[bold magenta]implements: {sess['adr_id']}[/bold magenta]  [dim](plan → path)[/dim]")
+
     stats = sess.get("cursor_stats", {})
     if any(v is not None for v in stats.values()):
         parts = []
