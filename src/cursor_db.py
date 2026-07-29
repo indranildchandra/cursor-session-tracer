@@ -3,8 +3,10 @@ cursor_db.py — reads Cursor IDE's local SQLite database to extract:
   - Active composer session ID and model name
   - Per-session token counts (inputTokens / outputTokens) from bubbleId rows
 
-Database location (macOS):
-  ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
+Database location (resolved per platform by _cursor_db_path):
+  macOS:   ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
+  Linux:   ~/.config/Cursor/User/globalStorage/state.vscdb
+  Windows: %APPDATA%/Cursor/User/globalStorage/state.vscdb
 
 Key tables:
   ItemTable      — key/value (auth tokens, model preferences, extension state)
@@ -16,26 +18,49 @@ Relevant key patterns in cursorDiskKV:
 """
 
 import json
+import os
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Optional
 
-CURSOR_DB = (
-    Path.home()
-    / "Library"
-    / "Application Support"
-    / "Cursor"
-    / "User"
-    / "globalStorage"
-    / "state.vscdb"
-)
+
+def _cursor_db_path() -> Path:
+    """
+    Resolve Cursor's local state.vscdb path for the current platform.
+
+    Honours the CURSOR_DB_PATH environment variable as an override (useful for
+    non-standard installs, portable Cursor, or tests). Falls back to the
+    platform default otherwise. The returned path may not exist — callers
+    (_connect) treat a missing file as "no Cursor DB available".
+    """
+    override = os.environ.get("CURSOR_DB_PATH")
+    if override:
+        return Path(override)
+
+    globalstorage = Path("User") / "globalStorage" / "state.vscdb"
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "Cursor"
+    elif sys.platform.startswith("win"):
+        appdata = os.environ.get("APPDATA")
+        base = (Path(appdata) if appdata else Path.home() / "AppData" / "Roaming") / "Cursor"
+    else:  # linux and other posix
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = (Path(xdg) if xdg else Path.home() / ".config") / "Cursor"
+
+    return base / globalstorage
+
+
+# Resolved once at import; callers tolerate a missing file gracefully.
+CURSOR_DB = _cursor_db_path()
 
 
 def _connect() -> Optional[sqlite3.Connection]:
-    if not CURSOR_DB.exists():
+    db_path = _cursor_db_path()
+    if not db_path.exists():
         return None
     try:
-        return sqlite3.connect(f"file:{CURSOR_DB}?mode=ro", uri=True)
+        return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except sqlite3.OperationalError:
         return None
 

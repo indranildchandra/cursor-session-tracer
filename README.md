@@ -96,6 +96,7 @@ Traces are stored as JSON files under `.cursor/traces/`:
     "outcome": "completed",
     "repo_snapshot": ["src/auth.py", "src/clients/github.py"],
     "cursor_stats": {
+      "composer_id": "b7f3c1a0-9e2d-4a11-8c3f-1d2e3f4a5b6c",
       "model": "claude-sonnet-4-5",
       "tool_call_count": 6,
       "tokens_in": 15000,
@@ -354,7 +355,7 @@ cursor-session-tracer/
 Cursor usage stats are captured automatically per session and stored in the trace:
 
 - `tool_call_count` — auto-incremented on every `append_trace` call
-- `model`, `tokens_in`, `tokens_out` — required at `end_trace` (cost is derivable from model + token counts)
+- `composer_id`, `model`, `tokens_in`, `tokens_out` — auto-captured from Cursor's local SQLite DB (`state.vscdb`); you do not pass them to `end_trace`
 
 This makes **agentic debt measurable**: sessions where the agent completed a task but left orphaned decisions, skipped checkpoints, or ran significantly over token budget are leading indicators of future maintenance cost.
 

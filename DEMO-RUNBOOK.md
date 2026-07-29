@@ -129,7 +129,7 @@ curl http://127.0.0.1:8080/sessions | python3 -m json.tool
 ```
 
 > "Every session is queryable. Outcome, event count, Cursor usage stats —
-> model, token counts, cost — all in the trace."
+> model, token counts — all auto-captured from Cursor's DB, in the trace."
 
 ### Step 6 — Optional: Mermaid output
 
@@ -175,9 +175,10 @@ r2 = append_trace(
 print("Step 2:", r2)
 
 r3 = end_trace(
-    session_id=r0["session_id"], outcome="completed",
-    model="claude-sonnet-4-5", tokens_in=8200, tokens_out=2100, cost_usd=0.0183
+    session_id=r0["session_id"], outcome="completed"
 )
+# model / tokens_in / tokens_out are auto-read from Cursor's local SQLite DB.
+# (When run outside a live Cursor session they come back null/0 — that's expected.)
 print("Ended:", r3)
 EOF
 
@@ -195,7 +196,7 @@ python render_trace.py --session $(date +%Y%m%d)/<SESSION_ID_FROM_ABOVE>
 | `append_trace` fires | "Decision logged. Not what — why." |
 | Parent chain forms | "This is a graph, not a log. Directed. Queryable." |
 | Tree renders | "This is what a senior engineer gets before opening the PR." |
-| Cursor stats shown | "Model, tokens, cost — all in the trace. Agentic debt is now measurable." |
+| Cursor stats shown | "Model and tokens — auto-captured from Cursor's own DB, nothing typed by hand. Agentic debt is now measurable." |
 | End of demo | "JSON today. Neo4j at org scale. Same schema." |
 
 ---

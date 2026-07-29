@@ -151,7 +151,7 @@ Close: the gap between AI-assisted development and AI-owned development is obser
 
 ### 4.2 Session Header Block
 
-Written once by `start_trace`. `ended_at`, `outcome`, and all `cursor_stats` fields (except `tool_call_count`) are null until `end_trace` is called. `tool_call_count` is auto-incremented on every `append_trace` call.
+Written once by `start_trace`. `composer_id` and `model` are auto-detected from Cursor's local SQLite DB at `start_trace` time (both null if no live Cursor session is found). `ended_at`, `outcome`, `tokens_in`, and `tokens_out` remain null until `end_trace` is called, at which point token counts are summed from Cursor's DB. `tool_call_count` is auto-incremented on every `append_trace` call.
 
 ```json
 {
@@ -164,11 +164,11 @@ Written once by `start_trace`. `ended_at`, `outcome`, and all `cursor_stats` fie
     "outcome": null,
     "repo_snapshot": ["src/auth.py", "src/clients/github.py", "src/middleware.py"],
     "cursor_stats": {
-      "model": null,
+      "composer_id": "b7f3c1a0-9e2d-4a11-8c3f-1d2e3f4a5b6c",
+      "model": "claude-sonnet-4-5",
       "tool_call_count": 0,
       "tokens_in": null,
-      "tokens_out": null,
-      "cost_usd": null
+      "tokens_out": null
     }
   },
   "events": []
@@ -278,18 +278,18 @@ append_trace(
 ```text
 end_trace(
   session_id: str,
-  outcome: str,
-  model: str = "",         # e.g. "claude-sonnet-4-5"
-  tokens_in: int = 0,
-  tokens_out: int = 0,
-  cost_usd: float = 0.0
+  outcome: str
 ) -> dict
 ```
 
 **Returns:**
 
 ```json
-{ "trace_file_path": ".cursor/traces/20260509/a1b2c3d4/143201_refactor_auth_clients.json" }
+{
+  "trace_file_path": ".cursor/traces/20260509/a1b2c3d4/143201_refactor_auth_clients.json",
+  "tokens_in": 15000,
+  "tokens_out": 4200
+}
 ```
 
 **Behaviour:**
@@ -297,8 +297,20 @@ end_trace(
 - Resolves trace file path from `session_id`
 - Writes `ended_at` (ISO timestamp) and `outcome` to the session header block
 - Outcome values: `completed`, `partial`, `aborted` — raises `ValueError` for any other value
-- Populates `cursor_stats` fields (`model`, `tokens_in`, `tokens_out`, `cost_usd`) if non-zero values are passed
-- Returns final trace file path
+- Auto-reads token counts from Cursor's local SQLite DB for this session's `composer_id` (assistant turns created at or after `started_at`) and writes `tokens_in` / `tokens_out`. If no `composer_id` was captured at `start_trace`, both stay null.
+- Returns the final trace file path plus the captured token counts
+
+> Model and token counts are **not** parameters — they are captured from Cursor's own database (see §5.4). This is deliberate: self-reported usage stats are unreliable; reading Cursor's ground truth makes agentic debt measurable rather than estimated.
+
+### 5.4 cursor_db.py — Cursor usage auto-capture
+
+`src/cursor_db.py` reads Cursor IDE's local SQLite database (`state.vscdb`) read-only to populate `cursor_stats` without the agent self-reporting anything:
+
+- `get_active_composer()` — returns the most recently active composer session's `composer_id` and `model` (used by `start_trace`)
+- `get_model_for_composer(composer_id)` — current model for a composer, used by `append_trace` to detect and log mid-session model switches (`model_override` on the event)
+- `get_token_counts(composer_id, since_iso)` — sums `inputTokens` / `outputTokens` across assistant turns created at or after the session start (used by `end_trace`)
+
+All three degrade gracefully: if the DB is missing (no Cursor installed, or non-supported OS) they return `None` / zero counts and the trace is still valid. The DB path is resolved per platform (macOS / Linux / Windows).
 
 ---
 
@@ -327,8 +339,7 @@ At the start of any task involving more than 2 files or any architectural change
 
 4. When the task is complete or you are stopping, call `end_trace` with:
    - `outcome` set to `completed`, `partial`, or `aborted`
-   - `model` set to the model name (e.g. `claude-sonnet-4-5`)
-   - `tokens_in`, `tokens_out`, `cost_usd` if available
+   - Do NOT pass model or token counts — they are auto-captured from Cursor's local SQLite DB.
 
 Do not call `append_trace` for trivial actions like reading a config file to check syntax. Call it when you are making a decision that affects other files or that a reviewer would want to understand three weeks from now.
 
