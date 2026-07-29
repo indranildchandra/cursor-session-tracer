@@ -18,8 +18,16 @@ $(BIN)/python: ## Create the virtualenv
 	$(PYTHON) -m venv $(VENV)
 	$(BIN)/pip install --upgrade pip
 
+.PHONY: setup-tools
+setup-tools: ## Install demo CLI tools (glow, watch, jq) via Homebrew
+	@if command -v brew >/dev/null 2>&1; then \
+		brew install glow watch jq; \
+	else \
+		echo "Homebrew not found — install glow, watch, and jq manually for the demo."; \
+	fi
+
 .PHONY: setup
-setup: $(BIN)/python ## Create venv (Python 3.12) and install dependencies
+setup: $(BIN)/python setup-tools ## Create venv (Python 3.12), install deps, and demo CLI tools
 	$(BIN)/pip install -r requirements.txt
 	@echo "\nSetup complete. Activate with:  source $(VENV)/bin/activate"
 

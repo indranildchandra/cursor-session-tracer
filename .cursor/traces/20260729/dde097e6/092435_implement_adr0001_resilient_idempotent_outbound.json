@@ -1,0 +1,116 @@
+{
+  "session": {
+    "session_id": "dde097e6",
+    "slug": "implement_adr0001_resilient_idempotent_outbound",
+    "task": "Implement ADR-0001: resilient, idempotent outbound calls for the checkout flow",
+    "adr_id": "ADR-0001",
+    "started_at": "2026-07-29T09:24:35Z",
+    "ended_at": "2026-07-29T09:25:38Z",
+    "outcome": "completed",
+    "repo_snapshot": [
+      "demo/resilience.py",
+      "demo/clients/stripe.py",
+      "demo/clients/github.py",
+      "demo/main.py"
+    ],
+    "cursor_stats": {
+      "composer_id": "febc6fdd-2637-4d27-afb3-21180f498c63",
+      "model": "composer-2.5",
+      "tool_call_count": 6,
+      "tokens_in": 0,
+      "tokens_out": 0
+    }
+  },
+  "events": [
+    {
+      "step_id": "step_001",
+      "parent_step_id": null,
+      "type": "decision",
+      "timestamp": "2026-07-29T09:25:38Z",
+      "reason": "Following ADR-0001. Idempotency must precede the retry loop or retries automate the double-charge bug. Single transport in demo/resilience.py rather than per-client retry logic.",
+      "files_read": [
+        "docs/adr/ADR-0001-resilient-idempotent-checkout.md",
+        "demo/main.py",
+        "demo/clients/stripe.py"
+      ],
+      "files_modified": [],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_002",
+      "parent_step_id": "step_001",
+      "type": "file_create",
+      "timestamp": "2026-07-29T09:25:38Z",
+      "reason": "Create demo/resilience.py: idempotency key short-circuit, then bounded retry (max 3, 100ms base, full jitter, transient-only), inside per-dependency circuit breaker. Injectable sleep/rng for deterministic tests.",
+      "files_read": [],
+      "files_modified": [],
+      "files_created": [
+        "demo/resilience.py"
+      ],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_003",
+      "parent_step_id": "step_002",
+      "type": "file_modify",
+      "timestamp": "2026-07-29T09:25:38Z",
+      "reason": "Route StripeClient.charge through transport with charge:{order_id} idempotency key so retried charges dedupe instead of double-charging.",
+      "files_read": [
+        "demo/clients/stripe.py"
+      ],
+      "files_modified": [
+        "demo/clients/stripe.py"
+      ],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_004",
+      "parent_step_id": "step_003",
+      "type": "file_modify",
+      "timestamp": "2026-07-29T09:25:38Z",
+      "reason": "Route GitHubClient.create_receipt_issue through same transport with receipt:{order_id} key; breaker keyed on GitHub base URL independently of Stripe.",
+      "files_read": [
+        "demo/clients/github.py"
+      ],
+      "files_modified": [
+        "demo/clients/github.py"
+      ],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_005",
+      "parent_step_id": "step_004",
+      "type": "file_modify",
+      "timestamp": "2026-07-29T09:25:38Z",
+      "reason": "Wire main.py checkout to pass order_id into charge(); orchestration unchanged, policy lives in resilience.py.",
+      "files_read": [
+        "demo/main.py"
+      ],
+      "files_modified": [
+        "demo/main.py"
+      ],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_006",
+      "parent_step_id": "step_005",
+      "type": "checkpoint",
+      "timestamp": "2026-07-29T09:25:38Z",
+      "reason": "Resilience tests pass: idempotent dedupe, transient retry, full-jitter backoff, circuit-open fast-fail, checkout idempotent on order_id.",
+      "files_read": [],
+      "files_modified": [],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    }
+  ]
+}

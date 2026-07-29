@@ -13,8 +13,8 @@ fi
 
 echo "Starting cursor-session-tracer on http://127.0.0.1:8080"
 echo "  MCP endpoint:     http://127.0.0.1:8080/mcp"
-echo "  Health:           http://127.0.0.1:8080/health"
-echo "  Sessions list:    http://127.0.0.1:8080/sessions"
+echo "  Health:           curl http://127.0.0.1:8080/health | jq ."
+echo "  Sessions list:    curl http://127.0.0.1:8080/sessions | jq ."
 echo ""
 
 .venv/bin/uvicorn src.app:app --host 127.0.0.1 --port 8080 --reload

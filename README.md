@@ -1,6 +1,6 @@
 # cursor-session-tracer
 
-**Agentic observability for Cursor.** When an agent restructures your codebase in a single session, git blame tells you *what* changed. This tells you **why** — a queryable, real-time reasoning trace of every decision, file touch, and reasoning chain, so you can debug a prod regression or review a PR by walking the trace instead of staring at the diff.
+**Agentic observability for Cursor.** When an agent restructures your codebase in a single session, git blame tells you *what* changed. This tells you **why** — a queryable reasoning trace of every decision, file touch, and parent-linked step, so you can debug a regression or review a PR by walking the trace instead of reverse-engineering the diff.
 
 <p>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12+-blue.svg">
@@ -10,18 +10,36 @@
 </p>
 
 > **Docs drift. Traces don't.**
-> A trace is a byproduct of the work, not a separate artefact someone has to remember to update. Pair it with an **ADR** — the decision-of-record produced by an [adversarial review](.cursor/commands/design-review.md) *before* implementation — and you get **plan vs. path**: what was decided and why, next to what actually happened, with [`audit_trace.py`](audit_trace.py) checking one stayed faithful to the other.
+> Pair an **ADR** (plan — from [`/design-review`](.cursor/commands/design-review.md)) with a **trace** (path — from three MCP tools during implementation). [`audit_trace.py`](audit_trace.py) checks they stayed faithful.
+
+![Plan vs. path — audit_trace FAITHFUL verdict](demo_screenshots/audit-trace-faithful-cli.png)
+
+---
+
+## At a glance
+
+| | |
+| --- | --- |
+| **Problem** | Agentic sessions leave code but no reasoning trail; `docs/` drifts from code |
+| **Plan** | ADR from an adversarial review council → [`docs/adr/`](docs/adr/) |
+| **Path** | Real-time trace via MCP → `.cursor/traces/` |
+| **Check** | `audit_trace.py` flags **LLD drift** (files changed outside the ADR scope) |
+| **Try offline** | Committed sample session `20260729/dde097e6` — no Cursor session required |
+
+**Documentation:** [DEMO-RUNBOOK.md](DEMO-RUNBOOK.md) (presenter commands) · [DESIGN-PLAN.md](DESIGN-PLAN.md) (talk + architecture) · [docs/adr/README.md](docs/adr/README.md) (ADR model)
 
 ---
 
 ## Table of contents
 
+- [At a glance](#at-a-glance)
 - [Why](#why)
-- [The two-artefact model: plan vs. path](#the-two-artefact-model-plan-vs-path)
+- [The two-artifact model: plan vs. path](#the-two-artifact-model-plan-vs-path)
 - [Quickstart](#quickstart)
 - [How the tracer works](#how-the-tracer-works)
 - [Wire it into Cursor](#wire-it-into-cursor)
 - [The live demo](#the-live-demo)
+- [Screenshots](#screenshots)
 - [Rendering & auditing traces](#rendering--auditing-traces)
 - [Testing](#testing)
 - [Roadmap / future scope](#roadmap--future-scope)
@@ -48,11 +66,11 @@ The fourth question is new. This project is a working answer to it.
 
 ---
 
-## The two-artefact model: plan vs. path
+## The two-artifact model: plan vs. path
 
 On long-lived brownfield projects the `docs/` folder is written once and never kept honest — the code moves on, the docs don't. The fix isn't more discipline; it's making the record a **byproduct of the work** at two moments:
 
-| Artefact | Produced | By | Answers | Lives in |
+| Artifact | Produced | By | Answers | Lives in |
 | --- | --- | --- | --- | --- |
 | **ADR** — the *plan* | *before* implementation | [`review-council`](.cursor/commands/design-review.md): an adversarial review by 3–6 expert personas | *What did we decide, and why?* | [`docs/adr/`](docs/adr/) |
 | **Trace** — the *path* | *during* implementation | the three MCP tools below | *What did the agent actually do?* | `.cursor/traces/` |
@@ -73,18 +91,18 @@ A PR then ships as **code + ADR + trace** — and the reviewer, human or agent, 
 
 ## Quickstart
 
-Requires **Python 3.12**.
+**Requires:** Python 3.12 · [Cursor](https://cursor.com) 0.43+ (MCP) · Cursor 1.6+ (`/design-review` command) · [Homebrew](https://brew.sh) on macOS for demo tools (`glow`, `watch`, `jq` — installed by `make setup`)
 
 ```bash
 git clone https://github.com/indranildchandra/cursor-session-tracer
 cd cursor-session-tracer
 
-make setup          # creates .venv (Python 3.12) and installs deps
-make test           # run the suite
-make server         # start the MCP + FastAPI server on http://127.0.0.1:8080
+make setup          # venv + deps + glow, watch, jq (Homebrew)
+make test
+make server         # http://127.0.0.1:8080 — leave running in one terminal
 ```
 
-On macOS, if `python3.12` isn't on your `PATH`, point `make` at the framework build:
+On macOS, if `python3.12` isn't on your `PATH`:
 
 ```bash
 make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3
@@ -94,15 +112,27 @@ make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3
 <summary>Prefer raw commands (no <code>make</code>)?</summary>
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+brew install glow watch jq
 python -m pytest tests/ -q
 uvicorn src.app:app --host 127.0.0.1 --port 8080 --reload
 ```
 </details>
 
-Health check: `curl http://127.0.0.1:8080/health` → `{"status":"ok","service":"cursor-session-tracer"}`
+### Smoke test (no live Cursor session)
+
+Uses the committed sample trace — works offline after clone:
+
+```bash
+curl http://127.0.0.1:8080/health | jq .
+python render_trace.py --session 20260729/dde097e6
+python audit_trace.py  --session 20260729/dde097e6
+python audit_trace.py  --session 20260729/dde097e6 --json | jq .
+# expect: FAITHFUL · faithful: true · four files in scope
+```
+
+Open this repo in Cursor and confirm **Settings → MCP → cursor-session-tracer** is connected while `make server` runs. Full demo loop: **[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)**.
 
 ---
 
@@ -128,29 +158,29 @@ Stored at `.cursor/traces/<YYYYMMDD>/<session_id>/<HHMMSS>_<slug>.json`:
 ```json
 {
   "session": {
-    "session_id": "a1b2c3d4",
-    "slug": "resilient_idempotent_checkout",
-    "task": "Make the checkout flow resilient and idempotent",
+    "session_id": "dde097e6",
+    "slug": "implement_adr0001_resilient_idempotent_outbound",
+    "task": "Implement ADR-0001: resilient, idempotent outbound calls for the checkout flow",
     "adr_id": "ADR-0001",
-    "started_at": "2026-05-09T14:32:01Z",
-    "ended_at": "2026-05-09T15:14:32Z",
+    "started_at": "2026-07-29T09:24:35Z",
+    "ended_at": "2026-07-29T09:25:38Z",
     "outcome": "completed",
-    "repo_snapshot": ["demo/resilience.py", "demo/clients/stripe.py"],
+    "repo_snapshot": ["demo/resilience.py", "demo/clients/stripe.py", "demo/clients/github.py", "demo/main.py"],
     "cursor_stats": {
-      "composer_id": "b7f3c1a0-…",
-      "model": "claude-sonnet-4-5",
+      "composer_id": "febc6fdd-…",
+      "model": "composer-2.5",
       "tool_call_count": 6,
-      "tokens_in": 15000,
-      "tokens_out": 4200
+      "tokens_in": 0,
+      "tokens_out": 0
     }
   },
   "events": [
     {
       "step_id": "step_003",
       "parent_step_id": "step_002",
-      "type": "decision",
-      "timestamp": "2026-05-09T14:33:45Z",
-      "reason": "charge() has no idempotency key; a retry double-charges. Route it through the transport.",
+      "type": "file_modify",
+      "timestamp": "2026-07-29T09:25:38Z",
+      "reason": "Route StripeClient.charge through transport with charge:{order_id} idempotency key so retried charges dedupe instead of double-charging.",
       "files_read": ["demo/clients/stripe.py"],
       "files_modified": ["demo/clients/stripe.py"],
       "files_created": [],
@@ -189,11 +219,73 @@ The bundled `demo/` app is a **naive checkout service** with a deliberate, dange
 
 That's a decision worth reviewing, not just coding. The demo walks the full loop:
 
-1. **Plan** — run `/design-review` on the checkout flow. The council (staff-engineer, appsec-architect, cloud-cost-architect, …) debates and converges: retries are unsafe before idempotency (a **blocker**), and backoff without jitter + a breaker causes a retry storm (a **converged concern**). It distils [**ADR-0001**](docs/adr/ADR-0001-resilient-idempotent-checkout.md) — full transcript in [`docs/design-review.md`](docs/design-review.md).
-2. **Path** — implement it in Cursor with the tracer running: `start_trace(..., adr_id="ADR-0001")`. Watch the trace populate in real time.
-3. **Check** — `audit_trace.py` verifies the implementation stayed inside the ADR's declared scope.
+1. **Plan** — `/design-review` on the checkout flow → [**ADR-0001**](docs/adr/ADR-0001-resilient-idempotent-checkout.md) (transcript: [`docs/design-review.md`](docs/design-review.md))
+2. **Path** — implement in Cursor with `start_trace(..., adr_id="ADR-0001")`; watch traces land
+3. **Check** — `audit_trace.py` verifies scope faithfulness (or flags LLD drift)
+4. **Prove** — checkout dedupe test shows the double-charge bug is closed
 
-Full step-by-step with the exact commands: **[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)**.
+Step-by-step commands (three-terminal layout, copy-paste appendix): **[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)**.
+
+Sample session **`20260729/dde097e6`** ships in-repo — use it in the examples below without running a live implement pass.
+
+---
+
+## Screenshots
+
+<details>
+<summary>Screenshots from a live ADR-0001 demo run (16 images)</summary>
+
+Captured during a live demo run. Reproduce with **[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)**.
+
+### Tracer server
+
+![Health check and /sessions API](demo_screenshots/tracer-health-and-sessions-api.png)
+
+### The double-charge bug
+
+![Two identical StripeClient.charge calls record two charges](demo_screenshots/stripe-double-charge-bug.png)
+
+### Plan — adversarial review (`/design-review`)
+
+![Design review transcript — scope and early phases](demo_screenshots/design-review-transcript-top.png)
+
+![Independent council persona reviews](demo_screenshots/design-review-council-reviews.png)
+
+![Phase 4 — council debate](demo_screenshots/design-review-council-debate.png)
+
+![Phase 5–6 — synthesis and ADR-0001 recorded](demo_screenshots/design-review-synthesis-adr-0001.png)
+
+### ADR-0001 — the distilled decision
+
+![ADR-0001 document (glow)](demo_screenshots/adr-0001-resilient-idempotent-checkout.png)
+
+![Scope, alternatives, and council verdict](demo_screenshots/adr-0001-scope-alternatives-verdict.png)
+
+### Path — implement with the tracer running
+
+![Cursor chat — design review complete](demo_screenshots/cursor-chat-snap-1.png)
+
+![Cursor chat — ADR-0001 implementation summary](demo_screenshots/cursor-chat-snap-2.png)
+
+### Render the trace (`render_trace.py`)
+
+![render_trace — verbose reasoning tree](demo_screenshots/render-trace-cli-verbose.png)
+
+![render_trace — files-only view](demo_screenshots/render-trace-cli-files-only.png)
+
+![render_trace — Mermaid diagram output](demo_screenshots/render-trace-cli-mode-mermaid.png)
+
+### Check — plan vs. path (`audit_trace.py`)
+
+![audit_trace — Plan vs. Path FAITHFUL](demo_screenshots/audit-trace-faithful-cli.png)
+
+![audit_trace — FAITHFUL verdict as JSON (`--json | jq .`)](demo_screenshots/audit-trace-faithful-cli-json.png)
+
+### After the fix — idempotent checkout
+
+![Checkout dedupe test — same order_id returns same charge](demo_screenshots/checkout-idempotency-dedupe-fix-test.png)
+
+</details>
 
 ---
 
@@ -202,19 +294,30 @@ Full step-by-step with the exact commands: **[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)*
 **Render a trace** as a terminal tree or a Mermaid diagram (PR-attachment ready):
 
 ```bash
-python render_trace.py --session 20260509/a1b2c3d4                 # terminal tree
-python render_trace.py --session 20260509/a1b2c3d4 --verbose       # full reason text
-python render_trace.py --session 20260509/a1b2c3d4 --files-only    # file touches only
-python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid  # → diagram.mermaid
+python render_trace.py --session 20260729/dde097e6                 # terminal tree
+python render_trace.py --session 20260729/dde097e6 --verbose       # full reason text
+python render_trace.py --session 20260729/dde097e6 --files-only    # file touches only
+python render_trace.py --session 20260729/dde097e6 --mode mermaid  # → diagram.mermaid
 ```
 
 **Audit plan vs. path** — the deterministic "independent reviewer". It reads the ADR's `Scope (files)` and diffs it against what the trace actually touched, flagging **LLD drift** (files changed but never planned):
 
 ```bash
-python audit_trace.py --session 20260509/a1b2c3d4          # resolves the ADR from the trace's adr_id
-python audit_trace.py --session 20260509/a1b2c3d4 --json   # PR-comment / CI gate (exit 1 on drift)
-# or: make audit SESSION=20260509/a1b2c3d4
+python audit_trace.py --session 20260729/dde097e6          # resolves the ADR from the trace's adr_id
+python audit_trace.py --session 20260729/dde097e6 --json | jq .   # PR-comment / CI gate (exit 1 on drift)
+# or: make audit SESSION=20260729/dde097e6
 ```
+
+The committed sample session is **faithful** to ADR-0001:
+
+```text
+──────────────── Plan vs. Path — FAITHFUL ────────────────
+✓ Implemented in scope (4/4):  demo/resilience.py, demo/clients/stripe.py,
+                               demo/clients/github.py, demo/main.py
+Verdict: the path stayed faithful to the plan.
+```
+
+When drift occurs, the audit surfaces it explicitly:
 
 ```text
 ──────────────── Plan vs. Path — DRIFT DETECTED ────────────────
@@ -254,7 +357,7 @@ on every PR. Those are the items below, and they're where contributions go furth
   We'd love contributions here — a `TraceStore` interface with a flat-file default and Neo4j / ClickHouse implementations. Open an issue to coordinate.
 - **Per-session cost capture.** Cursor's local DB gives token counts but not dollar cost; deriving `cost_usd` needs a maintained `model → price` map (and per-provider nuances). Dropped for now to avoid a stale price table — **contributions welcome** to add an opt-in pricing map so `cursor_stats` can carry cost.
 - **CI integration.** Wire `audit_trace.py --json` into a PR check that comments the plan-vs-path report and gates on LLD drift.
-- **Agentic reviewer.** The audit tool supplies the ground-truth planned-vs-actual diff; layer an agent on top to judge *semantic* faithfulness (did the change honour the ADR's intent, not just its file list).
+- **Agentic reviewer.** The audit tool supplies the ground-truth planned-vs-actual diff; layer an agent on top to judge *semantic* faithfulness (did the change honor the ADR's intent, not just its file list).
 
 ---
 
@@ -285,9 +388,29 @@ cursor-session-tracer/
 │   ├── commands/design-review.md# the /design-review command
 │   ├── review-council/          # adversarial-review personas + protocol
 │   └── traces/                  # trace files, written at runtime
+│       └── 20260729/dde097e6/   # committed sample trace (ADR-0001 live demo)
+├── demo_screenshots/            # screenshots from a live ADR-0001 demo run
+│   ├── tracer-health-and-sessions-api.png
+│   ├── stripe-double-charge-bug.png
+│   ├── design-review-transcript-top.png
+│   ├── design-review-council-reviews.png
+│   ├── design-review-council-debate.png
+│   ├── design-review-synthesis-adr-0001.png
+│   ├── adr-0001-resilient-idempotent-checkout.png
+│   ├── adr-0001-scope-alternatives-verdict.png
+│   ├── cursor-chat-snap-1.png   # design review complete in Cursor chat
+│   ├── cursor-chat-snap-2.png   # ADR-0001 implementation summary
+│   ├── render-trace-cli-verbose.png
+│   ├── render-trace-cli-files-only.png
+│   ├── render-trace-cli-mode-mermaid.png
+│   ├── audit-trace-faithful-cli.png
+│   ├── audit-trace-faithful-cli-json.png   # --json | jq . (CI gate output)
+│   └── checkout-idempotency-dedupe-fix-test.png
 ├── tests/                       # pytest suite (Python 3.12)
 ├── Makefile                     # setup / test / server / audit
-├── DEMO-RUNBOOK.md              # step-by-step live-demo guide
+├── DEMO-RUNBOOK.md              # live-demo guide + quick-reference commands
+├── DESIGN-PLAN.md               # talk design + full architecture (v2)
+├── CONTRIBUTING.md              # PR checklist + dogfooding guide
 └── requirements.txt
 ```
 
@@ -295,7 +418,15 @@ cursor-session-tracer/
 
 ## Contributing
 
-Issues and PRs welcome — see [Roadmap](#roadmap--future-scope) for where help goes furthest. Please run `make test` before opening a PR. If your change is architectural, dogfood the tool: run `/design-review` to produce an ADR, implement with the tracer running, and attach the trace + `audit_trace.py` output to your PR.
+Issues and PRs welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for setup, PR checklist, code conventions, and how to dogfood the plan → path → audit loop on architectural changes.
+
+Quick version:
+
+1. `make test` must pass before you open a PR.
+2. Keep `demo/` in the naive starting state unless the PR intentionally changes the demo (`tests/test_demo.py` is the canary).
+3. Architectural work: `/design-review` → ADR → implement with tracing → attach `audit_trace.py` output (human + `--json | jq .`) to the PR.
+
+High-impact areas: [Roadmap](#roadmap--future-scope).
 
 ## License
 

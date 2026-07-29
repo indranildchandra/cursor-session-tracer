@@ -29,7 +29,7 @@ It was a good answer to half a question. v2 adds the missing half:
 | **Demo** | auth refactor (`APIKeyAuth → BearerTokenAuth`) | **resilient, idempotent checkout** — a decision worth reviewing |
 
 The through-line: a record is only trustworthy if it is a **byproduct of the work**,
-not a separate artefact someone must remember to update. The trace is a byproduct of
+not a separate artifact someone must remember to update. The trace is a byproduct of
 implementation; the ADR is a byproduct of planning. Neither drifts.
 
 ---
@@ -55,7 +55,7 @@ The talk must land for both: name the business "so what" for leaders, and pre-em
    thread. By the time something breaks 48 hours later, there is no reasoning trail.
 2. **Documentation drift.** On long-lived brownfield projects, `docs/` is written once
    and never kept honest. This is structural, not a discipline failure: docs and code
-   are two artefacts with no feedback loop between them.
+   are two artifacts with no feedback loop between them.
 
 Both have the same cure: make the record a **byproduct** of the work at the moment the
 work happens.
@@ -79,7 +79,7 @@ the agent decided mid-session — the LLD layer has had no equivalent of an ADR.
 **Thesis:** Every change has two truths — what you *planned* and what you *did*. Capture
 the plan as an **ADR forged in adversarial review**, capture the path as a **real-time
 trace**, and check one against the other automatically. Together they replace the
-drifting `docs/` folder with two artefacts that move with the code, and they make the
+drifting `docs/` folder with two artifacts that move with the code, and they make the
 "PR of the future" — code + plan + path — reviewable by a human or an agent.
 
 ### 2.2 The core insight
@@ -122,7 +122,7 @@ live; the outline below is content, not a stopwatch.
    implement with the tracer running → `audit_trace.py` shows plan vs. path. (See §11.)
 3. **The gap.** HLD has ADRs; LLD has had nothing. The trace is the missing LLD record.
    The four questions: git history / step debugger / unit test / **agentic trace**.
-4. **Two artefacts, one system.** ADR = plan (adversarial review), trace = path
+4. **Two artifacts, one system.** ADR = plan (adversarial review), trace = path
    (implementation), audit = the check. Code, ADR, and trace move together.
 5. **The PR of the future.** A PR ships as code + ADR + trace. An independent
    reviewer — increasingly an agent — reasons about faithfulness-to-plan and flags LLD
@@ -163,11 +163,13 @@ live; the outline below is content, not a stopwatch.
 
 ```text
 .cursor/traces/
-  20260509/
-    a1b2c3d4/
-      143201_resilient_idempotent_checkout.json
-      151432_resilient_idempotent_checkout.json    <- restart, visible by design
+  20260729/
+    dde097e6/
+      092435_implement_adr0001_resilient_idempotent_outbound.json
 ```
+
+Committed sample (ships in-repo; `.gitignore` whitelists `20260729/`). Runtime traces
+land under `<YYYYMMDD>/<session_id>/` the same way.
 
 - **Date directory:** `YYYYMMDD`, created at `start_trace` time.
 - **Session directory:** `uuid4()[:8]`, returned to the agent, passed on every call.
@@ -186,20 +188,25 @@ DB at `start_trace` (both `null` if no live Cursor session). `ended_at`, `outcom
 ```json
 {
   "session": {
-    "session_id": "a1b2c3d4",
-    "slug": "resilient_idempotent_checkout",
-    "task": "Implement ADR-0001: resilient, idempotent outbound calls for checkout",
+    "session_id": "dde097e6",
+    "slug": "implement_adr0001_resilient_idempotent_outbound",
+    "task": "Implement ADR-0001: resilient, idempotent outbound calls for the checkout flow",
     "adr_id": "ADR-0001",
-    "started_at": "2026-05-09T14:32:01Z",
-    "ended_at": null,
-    "outcome": null,
-    "repo_snapshot": ["demo/resilience.py", "demo/clients/stripe.py"],
+    "started_at": "2026-07-29T09:24:35Z",
+    "ended_at": "2026-07-29T09:25:38Z",
+    "outcome": "completed",
+    "repo_snapshot": [
+      "demo/resilience.py",
+      "demo/clients/stripe.py",
+      "demo/clients/github.py",
+      "demo/main.py"
+    ],
     "cursor_stats": {
-      "composer_id": "b7f3c1a0-9e2d-4a11-8c3f-1d2e3f4a5b6c",
-      "model": "claude-sonnet-4-5",
-      "tool_call_count": 0,
-      "tokens_in": null,
-      "tokens_out": null
+      "composer_id": "febc6fdd-2637-4d27-afb3-21180f498c63",
+      "model": "composer-2.5",
+      "tool_call_count": 6,
+      "tokens_in": 0,
+      "tokens_out": 0
     }
   },
   "events": []
@@ -213,8 +220,8 @@ DB at `start_trace` (both `null` if no live Cursor session). `ended_at`, `outcom
   "step_id": "step_003",
   "parent_step_id": "step_002",
   "type": "decision",
-  "timestamp": "2026-05-09T14:36:12Z",
-  "reason": "charge() has no idempotency key; a retry double-charges. Route it through the transport with order_id as the key.",
+  "timestamp": "2026-07-29T09:25:38Z",
+  "reason": "Route StripeClient.charge through transport with charge:{order_id} idempotency key so retried charges dedupe instead of double-charging.",
   "files_read": ["demo/clients/stripe.py"],
   "files_modified": ["demo/clients/stripe.py"],
   "files_created": [],
@@ -245,7 +252,7 @@ reference → an edge to a file node. This is what makes the future ClickHouse/N
 
 ```text
 start_trace(task_description: str, files_in_scope: list[str], adr_id: str = "") -> dict
-# -> {"session_id": "a1b2c3d4", "trace_file_path": ".cursor/traces/.../….json"}
+# -> {"session_id": "dde097e6", "trace_file_path": ".cursor/traces/.../….json"}
 ```
 
 - Generates `session_id` (`uuid4()[:8]`) and the slug; creates the date + session dirs.
@@ -328,8 +335,8 @@ gathers the files the trace actually touched, and reports:
 - **Reads outside scope** — informational, not drift
 
 ```bash
-python audit_trace.py --session 20260509/a1b2c3d4          # resolves ADR from the trace's adr_id
-python audit_trace.py --session 20260509/a1b2c3d4 --json   # PR comment / CI gate (exit 1 on drift)
+python audit_trace.py --session 20260729/dde097e6                 # human-readable FAITHFUL | DRIFT
+python audit_trace.py --session 20260729/dde097e6 --json | jq .   # PR comment / CI gate (exit 1 on drift)
 ```
 
 Exit code: `0` faithful, `1` drift — so it drops straight into a CI gate. This supplies
@@ -378,17 +385,24 @@ charges via Stripe then writes a receipt via GitHub, every call unguarded:
 
 That's a decision worth reviewing, not just coding. The demo walks the full loop:
 
-1. **Plan** — `/design-review` on the checkout flow. The council surfaces a **blocker**
-   (retries before idempotency = automatic double-charge) and a **converged concern**
-   (backoff without jitter + no breaker = retry storm), plus a rejected alternative and a
-   recorded human override deferring distributed breaker state to ADR-0002. → `docs/adr/
-   ADR-0001-resilient-idempotent-checkout.md` (transcript in `docs/design-review.md`).
-2. **Path** — implement with `start_trace(..., adr_id="ADR-0001")`; watch the trace form.
-3. **Check** — `audit_trace.py` confirms the implementation stayed in scope, or flags drift.
+1. **Plan** — `/design-review` on the checkout flow (or `glow docs/design-review.md` for
+   the pre-baked transcript). The council surfaces a **blocker** (retries before idempotency
+   = automatic double-charge) and a **converged concern** (backoff without jitter + no
+   breaker = retry storm). → `docs/adr/ADR-0001-resilient-idempotent-checkout.md`.
+2. **Path** — implement with `start_trace(..., adr_id="ADR-0001")`; `watch` trace files in
+   a second terminal (`watch -n 1 "find .cursor/traces -name '*.json' | sort"`).
+3. **Check** — `audit_trace.py` confirms scope faithfulness; `--json | jq .` for CI-shaped
+   output.
+4. **Prove** — post `/checkout` dedupe test shows the double-charge bug is closed.
+
+Presenter copy-paste commands, terminal layout, and screenshot references:
+**[DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)** (includes a Quick reference appendix).
+**[demo_screenshots/](demo_screenshots/)** — captures from a live run (linked in README).
 
 `tests/test_demo.py` is a **canary**: it asserts the naive starting state and fails loudly
 if `demo/` is accidentally left in the post-implementation state before a talk. A committed
-sample trace (`.cursor/traces/20260509/a1b2c3d4/`) renders and audits FAITHFUL out of the box.
+sample trace (`.cursor/traces/20260729/dde097e6/`) renders and audits **FAITHFUL** out of
+the box against ADR-0001.
 
 ---
 
@@ -409,7 +423,7 @@ Framed for a newcomer: here is where the project is and where it goes next.
 - **CI integration.** Wire `audit_trace.py --json` into a PR check that comments the
   plan-vs-path report and gates on LLD drift.
 - **Agentic reviewer.** `audit_trace.py` supplies the ground-truth file diff; layer an agent
-  that judges *semantic* faithfulness — did the change honour the ADR's intent, not just its
+  that judges *semantic* faithfulness — did the change honor the ADR's intent, not just its
   file list.
 - **Agentic debt as a metric.** Once traces accumulate: sessions with orphaned decisions,
   skipped checkpoints, or out-of-scope touches are leading indicators of maintenance cost.
@@ -420,9 +434,15 @@ Framed for a newcomer: here is where the project is and where it goes next.
 
 - **Python 3.12** (reference: `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3`
   on macOS). Validated on 3.12.3.
-- **Makefile:** `make setup` (venv + deps), `make test`, `make server`, `make audit
-  SESSION=…`. macOS override: `make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3`.
+- **Makefile:** `make setup` (venv + deps + demo CLI tools via Homebrew: `glow`, `watch`,
+  `jq`), `make test`, `make server`, `make audit SESSION=…`, `make setup-tools` (CLI tools
+  only). macOS override: `make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3`.
+- **Demo presentation:** `curl … | jq .` for JSON; `glow` for ADR / design-review markdown;
+  `watch` for live trace panes during implementation.
 - **Dependencies** pinned in `requirements.txt`; `make setup` builds an isolated `.venv`.
 - **Tests** (`pytest`, Python 3.12) cover file utils, all three MCP tools (incl. `adr_id`),
   the cross-platform Cursor-DB reader, both renderers, the plan-vs-path audit, and the demo
   canary.
+- **Docs map:** [README.md](README.md) (overview) · [DEMO-RUNBOOK.md](DEMO-RUNBOOK.md)
+  (presenter commands) · [CONTRIBUTING.md](CONTRIBUTING.md) (PR guide) ·
+  [docs/adr/README.md](docs/adr/README.md) (ADR model).
