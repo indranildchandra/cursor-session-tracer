@@ -22,7 +22,6 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
 
 
 def _cursor_db_path() -> Path:
@@ -55,7 +54,7 @@ def _cursor_db_path() -> Path:
 CURSOR_DB = _cursor_db_path()
 
 
-def _connect() -> Optional[sqlite3.Connection]:
+def _connect() -> sqlite3.Connection | None:
     db_path = _cursor_db_path()
     if not db_path.exists():
         return None
@@ -65,7 +64,7 @@ def _connect() -> Optional[sqlite3.Connection]:
         return None
 
 
-def get_active_composer() -> Optional[dict]:
+def get_active_composer() -> dict | None:
     """
     Returns the most recently active Cursor composer session.
 
@@ -101,7 +100,7 @@ def get_active_composer() -> Optional[dict]:
         con.close()
 
 
-def get_model_for_composer(composer_id: str) -> Optional[str]:
+def get_model_for_composer(composer_id: str) -> str | None:
     """
     Returns the current modelName for a given composerId.
     Used by append_trace to detect mid-session model switches.

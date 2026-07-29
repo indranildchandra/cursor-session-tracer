@@ -2,13 +2,15 @@
 Tests for audit_trace.py — the plan-vs-path faithfulness check.
 """
 
+import json
 import sys
 from pathlib import Path
+
+from click.testing import CliRunner
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import audit_trace as at
-
 
 # ---------------------------------------------------------------------------
 # ADR scope parsing
@@ -104,3 +106,90 @@ def test_audit_reads_outside_scope_are_informational_not_drift():
     assert result["faithful"] is True
     assert "demo/unrelated.py" in result["reads_outside_scope"]
     assert "demo/unrelated.py" not in result["drift"]
+
+
+# ---------------------------------------------------------------------------
+# CLI (in-process, via click's CliRunner) — covers main()
+# ---------------------------------------------------------------------------
+
+def _setup_cli(tmp_path, monkeypatch, *, adr_id, scope, changed, write_adr=True):
+    """Build a temp trace (+ optional ADR) and point audit_trace's roots at them."""
+    traces = tmp_path / "traces"
+    sess_dir = traces / "20260509" / "sess1234"
+    sess_dir.mkdir(parents=True)
+    events = [{
+        "step_id": "step_001", "parent_step_id": None, "type": "file_modify",
+        "reason": "x", "files_read": [], "files_modified": list(changed),
+        "files_created": [], "files_deleted": [], "notes": "",
+    }]
+    (sess_dir / "t.json").write_text(json.dumps(
+        {"session": {"session_id": "sess1234", "adr_id": adr_id}, "events": events}
+    ))
+    adr_root = tmp_path / "adr"
+    adr_root.mkdir()
+    monkeypatch.setattr(at, "TRACES_ROOT", traces)
+    monkeypatch.setattr(at, "ADR_ROOT", adr_root)
+    adr_path = None
+    if write_adr:
+        scope_block = "\n".join(f"- `{f}`" for f in scope)
+        adr_path = adr_root / f"{adr_id}-x.md"
+        adr_path.write_text(f"# {adr_id}\n\n## Scope (files)\n\n{scope_block}\n\n## End\n")
+    return "20260509/sess1234", adr_path
+
+
+def test_cli_faithful_exit_zero(tmp_path, monkeypatch):
+    session, _ = _setup_cli(tmp_path, monkeypatch, adr_id="ADR-0001",
+                            scope=["a.py", "b.py"], changed=["a.py"])
+    result = CliRunner().invoke(at.main, ["--session", session])
+    assert result.exit_code == 0, result.output
+    assert "FAITHFUL" in result.output
+
+
+def test_cli_drift_exit_one(tmp_path, monkeypatch):
+    session, _ = _setup_cli(tmp_path, monkeypatch, adr_id="ADR-0001",
+                            scope=["a.py"], changed=["a.py", "sneaky.py"])
+    result = CliRunner().invoke(at.main, ["--session", session])
+    assert result.exit_code == 1
+    assert "DRIFT" in result.output
+    assert "sneaky.py" in result.output
+
+
+def test_cli_json_mode(tmp_path, monkeypatch):
+    session, _ = _setup_cli(tmp_path, monkeypatch, adr_id="ADR-0001",
+                            scope=["a.py"], changed=["a.py", "sneaky.py"])
+    result = CliRunner().invoke(at.main, ["--session", session, "--json"])
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["faithful"] is False
+    assert payload["drift"] == ["sneaky.py"]
+
+
+def test_cli_explicit_adr_flag(tmp_path, monkeypatch):
+    session, adr_path = _setup_cli(tmp_path, monkeypatch, adr_id="ADR-0001",
+                                   scope=["a.py"], changed=["a.py"])
+    result = CliRunner().invoke(at.main, ["--session", session, "--adr", str(adr_path)])
+    assert result.exit_code == 0, result.output
+    assert "FAITHFUL" in result.output
+
+
+def test_cli_no_adr_found_exit_one(tmp_path, monkeypatch):
+    # adr_id present on the trace but no matching ADR file exists.
+    session, _ = _setup_cli(tmp_path, monkeypatch, adr_id="ADR-9999",
+                            scope=[], changed=["a.py"], write_adr=False)
+    result = CliRunner().invoke(at.main, ["--session", session])
+    assert result.exit_code == 1
+    assert "No ADR" in result.output
+
+
+def test_cli_bad_session_arg(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "TRACES_ROOT", tmp_path / "traces")
+    result = CliRunner().invoke(at.main, ["--session", "not-a-valid-arg"])
+    assert result.exit_code == 1
+    assert "DATE/SESSION_ID" in result.output
+
+
+def test_cli_missing_session_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(at, "TRACES_ROOT", tmp_path / "traces")
+    result = CliRunner().invoke(at.main, ["--session", "20260509/nope"])
+    assert result.exit_code == 1
+    assert "not found" in result.output

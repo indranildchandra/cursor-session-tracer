@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**", "claude/**"]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff==0.14.4
+      - name: ruff check
+        run: ruff check .
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests with coverage
+        run: >-
+          pytest tests/ -q
+          --cov=src --cov=render_trace --cov=audit_trace
+          --cov-report=term-missing
+      - name: Run reference-solution tests (post-ADR-0001 tree)
+        working-directory: "files-changed post-demo-run"
+        run: PYTHONPATH=. pytest tests/ -q
+
+  audit-self-check:
+    name: Plan-vs-path self-check (dogfood)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      # Dogfood: the committed sample trace must still audit FAITHFUL against its ADR.
+      - name: Audit the sample trace against its ADR
+        run: python audit_trace.py --session 20260729/dde097e6

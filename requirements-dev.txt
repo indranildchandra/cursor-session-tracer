@@ -1,0 +1,4 @@
+# Development / CI tooling (runtime deps are in requirements.txt)
+-r requirements.txt
+ruff==0.14.4
+pytest-cov==7.0.0

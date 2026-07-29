@@ -134,3 +134,8 @@ diagram.mermaid
 
 **/.DS_Store
 **/__pycache__/
+
+# Coverage artifacts
+.coverage
+htmlcov/
+coverage.xml

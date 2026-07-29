@@ -31,9 +31,25 @@ setup: $(BIN)/python setup-tools ## Create venv (Python 3.12), install deps, and
 	$(BIN)/pip install -r requirements.txt
 	@echo "\nSetup complete. Activate with:  source $(VENV)/bin/activate"
 
+.PHONY: dev
+dev: $(BIN)/python ## Install dev + CI tooling (ruff, pytest-cov)
+	$(BIN)/pip install -r requirements-dev.txt
+
 .PHONY: test
 test: ## Run the test suite
 	$(BIN)/python -m pytest tests/ -q
+
+.PHONY: cov
+cov: ## Run the test suite with a coverage report
+	$(BIN)/python -m pytest tests/ --cov=src --cov=render_trace --cov=audit_trace --cov-report=term-missing
+
+.PHONY: lint
+lint: ## Lint with ruff (needs: make dev)
+	$(BIN)/ruff check .
+
+.PHONY: format
+format: ## Auto-format with ruff (needs: make dev)
+	$(BIN)/ruff format .
 
 .PHONY: server
 server: ## Start the MCP + FastAPI server on http://127.0.0.1:8080

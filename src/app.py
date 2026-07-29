@@ -49,7 +49,7 @@ async def list_sessions():
 
     for json_file in sorted(traces_root.glob("*/*/*.json"), reverse=True):
         try:
-            with open(json_file, "r") as f:
+            with open(json_file) as f:
                 data = json.load(f)
             sess = data.get("session", {})
             sessions.append(

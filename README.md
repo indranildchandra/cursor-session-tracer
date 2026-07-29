@@ -3,16 +3,28 @@
 **Agentic observability for Cursor.** When an agent restructures your codebase in a single session, git blame tells you *what* changed. This tells you **why** — a queryable reasoning trace of every decision, file touch, and parent-linked step, so you can debug a regression or review a PR by walking the trace instead of reverse-engineering the diff.
 
 <p>
+  <a href="https://github.com/indranildchandra/cursor-session-tracer/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/indranildchandra/cursor-session-tracer/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12+-blue.svg">
+  <img alt="coverage 94%" src="https://img.shields.io/badge/coverage-94%25-brightgreen.svg">
   <img alt="MCP" src="https://img.shields.io/badge/protocol-MCP-8A2BE2.svg">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green.svg">
-  <img alt="Tests: pytest" src="https://img.shields.io/badge/tests-pytest-0A9EDC.svg">
 </p>
 
 > **Docs drift. Traces don't.**
 > Pair an **ADR** (plan — from [`/design-review`](.cursor/commands/design-review.md)) with a **trace** (path — from three MCP tools during implementation). [`audit_trace.py`](audit_trace.py) checks they stayed faithful.
 
-![Plan vs. path — audit_trace FAITHFUL verdict](demo_screenshots/audit-trace-faithful-cli.png)
+<table>
+  <tr>
+    <td width="50%" align="center"><b>Path — the reasoning trace</b><br><sub><code>render_trace.py --session …</code></sub></td>
+    <td width="50%" align="center"><b>Check — plan vs. path</b><br><sub><code>audit_trace.py --session …</code></sub></td>
+  </tr>
+  <tr>
+    <td valign="top"><img alt="render_trace reasoning chain — every decision, why, and the files it touched" src="demo_screenshots/render-trace-cli-verbose.png"></td>
+    <td valign="top"><img alt="audit_trace FAITHFUL verdict — implementation stayed inside the ADR scope" src="demo_screenshots/audit-trace-faithful-cli.png"></td>
+  </tr>
+</table>
+
+<sub>Left: the agent's reasoning chain, rendered from the trace. Right: the audit confirming every file it touched was in the ADR's plan. Both from the committed sample <code>20260729/dde097e6</code> — reproduce with no Cursor session required.</sub>
 
 ---
 
@@ -332,10 +344,15 @@ When drift occurs, the audit surfaces it explicitly:
 ## Testing
 
 ```bash
-make test        # or: .venv/bin/python -m pytest tests/ -q
+make test        # run the suite            (or: .venv/bin/python -m pytest tests/ -q)
+make dev         # install dev/CI tooling    (ruff, pytest-cov)
+make cov         # suite + coverage report
+make lint        # ruff check .
 ```
 
-Validated on **Python 3.12**. Coverage spans the file utilities, all three MCP tools (incl. `adr_id` linking), the cross-platform Cursor-DB reader, both renderers, the plan-vs-path audit, and a canary suite over the demo's starting state (`tests/test_demo.py` fails loudly if `demo/` is accidentally left in the post-implementation state before a talk).
+**110 tests, ~94% line coverage, nothing skipped**, validated on **Python 3.12** and enforced in [CI](.github/workflows/ci.yml) on every push/PR (lint + tests + a dogfood step that re-audits the sample trace). Coverage spans the file utilities, all three MCP tools (incl. `adr_id` linking), the cross-platform Cursor-DB reader, the FastAPI endpoints, both renderers (including their CLIs), the plan-vs-path audit (functions **and** CLI), and a canary suite over the demo's starting state — `tests/test_demo.py` fails loudly if `demo/` is left in the post-implementation state before a talk.
+
+The reference solution under [`files-changed post-demo-run/`](files-changed%20post-demo-run/README.md) has its own tests (`test_resilience.py`) for the dedupe / retry / breaker behavior; they run in CI against that self-contained tree and are excluded from the main suite by design (the naive `demo/` has no `resilience.py`).
 
 ---
 
@@ -380,7 +397,8 @@ cursor-session-tracer/
 │   ├── adr/                     # Architecture Decision Records — the PLAN half
 │   │   ├── README.md            # the plan-vs-path model
 │   │   ├── TEMPLATE.md          # ADR template (machine-readable Scope section)
-│   │   └── ADR-0001-resilient-idempotent-checkout.md
+│   │   ├── ADR-0001-resilient-idempotent-checkout.md
+│   │   └── ADR-0002-distributed-circuit-breaker.md   # Proposed — follow-up
 │   └── design-review.md         # full adversarial-review transcript (ADR-0001's lineage)
 ├── .cursor/
 │   ├── mcp.json                 # Cursor MCP registration (auto-loaded)
@@ -406,12 +424,17 @@ cursor-session-tracer/
 │   ├── audit-trace-faithful-cli.png
 │   ├── audit-trace-faithful-cli-json.png   # --json | jq . (CI gate output)
 │   └── checkout-idempotency-dedupe-fix-test.png
-├── tests/                       # pytest suite (Python 3.12)
-├── Makefile                     # setup / test / server / audit
+├── files-changed post-demo-run/ # reference solution the demo produces (own tests)
+├── tests/                       # pytest suite (Python 3.12) — 110 tests, ~94% cov
+├── .github/workflows/ci.yml     # CI: ruff lint + tests/coverage + dogfood audit
+├── Makefile                     # setup / dev / test / cov / lint / server / audit
+├── pyproject.toml               # pytest + ruff config
+├── requirements.txt             # runtime deps
+├── requirements-dev.txt         # + ruff, pytest-cov (CI/lint)
+├── .python-version              # 3.12
 ├── DEMO-RUNBOOK.md              # live-demo guide + quick-reference commands
 ├── DESIGN-PLAN.md               # talk design + full architecture (v2)
-├── CONTRIBUTING.md              # PR checklist + dogfooding guide
-└── requirements.txt
+└── CONTRIBUTING.md              # PR checklist + dogfooding guide
 ```
 
 ---

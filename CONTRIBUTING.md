@@ -31,7 +31,8 @@ Bug fixes, docs, tests, and renderer/audit improvements are always welcome.
 
 Before opening a PR:
 
-- [ ] `make test` passes on **Python 3.12**
+- [ ] `make test` passes on **Python 3.12** (CI runs the same suite + coverage)
+- [ ] `make lint` passes (`ruff`) — run `make dev` once to install the tooling
 - [ ] Changes are scoped to the issue — no drive-by refactors
 - [ ] New behavior has tests when the change is non-trivial
 - [ ] `demo/` stays in the **naive starting state** unless the PR intentionally changes the demo premise (the canary `tests/test_demo.py` enforces this)

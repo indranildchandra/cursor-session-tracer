@@ -21,7 +21,6 @@ Exit code: 0 if faithful (no drift), 1 if drift detected or inputs missing.
 """
 
 import json
-import re
 import sys
 from pathlib import Path
 

@@ -7,11 +7,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import render_trace as rt
 from render_trace import _escape_mermaid, build_event_tree, render_mermaid
-
 
 # ---------------------------------------------------------------------------
 # Sample fixtures
@@ -212,10 +213,6 @@ def test_render_mermaid_decision_node_single_quoted(sample_data):
 # render_trace.py CLI (in-process, via click's CliRunner)
 # ---------------------------------------------------------------------------
 
-import render_trace as rt
-from click.testing import CliRunner
-
-
 def _write_session(tmp_path, monkeypatch, data, filename="143201_x.json"):
     """Point TRACES_ROOT at a tmp dir holding one session, return its --session arg."""
     root = tmp_path / ".cursor" / "traces"
@@ -263,3 +260,66 @@ def test_cli_terminal_handles_brackets_in_task(tmp_path, sample_data, monkeypatc
     result = CliRunner().invoke(rt.main, ["--session", session])
     assert result.exit_code == 0, result.output
     assert "BUG-123" in result.output
+
+
+def test_cli_files_only_mode(tmp_path, sample_data, monkeypatch):
+    session = _write_session(tmp_path, monkeypatch, sample_data)
+    result = CliRunner().invoke(rt.main, ["--session", session, "--files-only"])
+    assert result.exit_code == 0, result.output
+
+
+def test_cli_verbose_mode(tmp_path, sample_data, monkeypatch):
+    session = _write_session(tmp_path, monkeypatch, sample_data)
+    result = CliRunner().invoke(rt.main, ["--session", session, "--verbose"])
+    assert result.exit_code == 0, result.output
+
+
+def test_cli_renders_created_deleted_and_notes(tmp_path, monkeypatch):
+    data = {
+        "session": {
+            "session_id": "a1b2c3d4", "slug": "s", "task": "t",
+            "started_at": "2026-05-09T14:32:01Z", "ended_at": None, "outcome": None,
+            "repo_snapshot": [], "cursor_stats": {},
+        },
+        "events": [
+            {"step_id": "step_001", "parent_step_id": None, "type": "file_create",
+             "timestamp": "2026-05-09T14:32:18Z", "reason": "add", "files_read": [],
+             "files_modified": [], "files_created": ["new.py"], "files_deleted": ["old.py"],
+             "notes": "a note worth keeping"},
+        ],
+    }
+    session = _write_session(tmp_path, monkeypatch, data)
+    result = CliRunner().invoke(rt.main, ["--session", session])
+    assert result.exit_code == 0, result.output
+    assert "new.py" in result.output
+    assert "old.py" in result.output
+    assert "a note worth keeping" in result.output
+
+
+def test_cli_empty_events(tmp_path, monkeypatch):
+    data = {
+        "session": {
+            "session_id": "a1b2c3d4", "slug": "s", "task": "t",
+            "started_at": "2026-05-09T14:32:01Z", "ended_at": None, "outcome": None,
+            "repo_snapshot": [], "cursor_stats": {},
+        },
+        "events": [],
+    }
+    session = _write_session(tmp_path, monkeypatch, data)
+    result = CliRunner().invoke(rt.main, ["--session", session])
+    assert result.exit_code == 0, result.output
+    assert "No events recorded" in result.output
+
+
+def test_cli_bad_session_arg(tmp_path, monkeypatch):
+    monkeypatch.setattr(rt, "TRACES_ROOT", tmp_path / "traces")
+    result = CliRunner().invoke(rt.main, ["--session", "nope"])
+    assert result.exit_code == 1
+    assert "DATE/SESSION_ID" in result.output
+
+
+def test_cli_missing_session_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(rt, "TRACES_ROOT", tmp_path / "traces")
+    result = CliRunner().invoke(rt.main, ["--session", "20260509/nope"])
+    assert result.exit_code == 1
+    assert "not found" in result.output

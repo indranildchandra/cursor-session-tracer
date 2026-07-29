@@ -6,9 +6,8 @@ Handles slug generation, path resolution, and JSON read/write.
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 
 TRACES_ROOT = Path(".cursor/traces")
 
@@ -25,15 +24,15 @@ def generate_slug(task_description: str) -> str:
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def get_date_dir() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    return datetime.now(UTC).strftime("%Y%m%d")
 
 
 def get_time_prefix() -> str:
-    return datetime.now(timezone.utc).strftime("%H%M%S")
+    return datetime.now(UTC).strftime("%H%M%S")
 
 
 def build_trace_path(date_dir: str, session_id: str, slug: str, time_prefix: str) -> Path:
@@ -56,7 +55,7 @@ def resolve_trace_path(session_id: str) -> Path:
 
 
 def read_trace(path: Path) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
