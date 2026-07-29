@@ -4,112 +4,144 @@
 
 ---
 
-## 2026-05-09 06:40:00 — Migrate API clients from APIKeyAuth to BearerTokenAuth
+## 2026-05-09 06:40:00 — Resilient, idempotent outbound calls for the checkout flow
 
-> Distilled into **ADR-0001** (`docs/adr/ADR-0001-bearer-token-auth.md`). This entry is the full transcript the ADR was formulated from.
+> Distilled into **ADR-0001** (`docs/adr/ADR-0001-resilient-idempotent-checkout.md`).
+> This entry is the full transcript the ADR was formulated from.
 
 ### Scope
 
-The `demo/` service's GitHub and Stripe clients authenticate with `APIKeyAuth`
-(static `X-API-Key` header, constructed inline in each client). Upstream and our
-gateway now expect `Authorization: Bearer <token>`. Reviewing the plan to
-introduce `BearerTokenAuth` in `demo/auth.py`, route it through
-`get_current_auth()`, and update both clients + `demo/main.py`.
+The `/checkout` flow charges via `StripeClient.charge` then records a receipt via
+`GitHubClient.create_receipt_issue`. Both calls are direct and unguarded — no
+idempotency, no retries, no circuit breaker. Reviewing the plan to introduce a
+shared resilient transport (`demo/resilience.py`) providing idempotency keys,
+retry-with-backoff, and a circuit breaker, and to route the mutating client calls
+through it.
 
 ### Phase 0 — Human Brief
 
-- **Concern:** "It's a small change but it touches every outbound call. I want to
-  be sure nothing fails silently."
-- **Constraint:** demo must stay runnable for a live talk; keep it minimal.
-- **Personas requested:** none specific — pick for a cross-cutting auth change.
+- **Concern:** "Checkout must never double-charge. I also want it to survive a
+  flaky Stripe without waking anyone up. Keep it demo-simple — no external infra."
+- **Constraint:** dependency-light; must run on a laptop for a live talk.
+- **Personas requested:** none specific; pick for a money-path reliability change.
 
 ### Council Composition
 
 | Persona | Domain | Model |
 |---|---|---|
-| staff-engineer | System-level correctness, blast radius | sonnet |
-| appsec-architect | Auth/secret handling | sonnet |
-| senior-backend-engineer | Implementation seams | haiku |
-| lead-sdet | Test coverage / canary | haiku |
+| staff-engineer | System correctness, failure modes, blast radius | sonnet |
+| appsec-architect | Money-path safety, idempotency, replay | sonnet |
+| cloud-cost-architect | Retry amplification, outage economics | sonnet |
+| senior-backend-engineer | Where the seam lives, client ergonomics | haiku |
+| lead-sdet | Determinism & testability of backoff/jitter | haiku |
 
 ### Round 1 — Independent Assessments
 
 #### staff-engineer (sonnet)
-**Stance:** caution
+**Stance:** block
 **Top findings:**
-- Cutover is atomic-or-broken: any client left on the inline header fails at call
-  time, not import time — no compiler help.
-- The `.headers` seam is the right centralisation; make it the *only* place a
-  header is built.
-**Blocker (if any):** none
-**Questions to council:** Should there be a transition window, or a hard cutover?
+- Retries and idempotency are ordered, not independent: adding retries first turns
+  a manual double-charge into an automatic one.
+- Circuit breaker state must be explicit — a per-process breaker is fine but must
+  be *named* as such so nobody assumes fleet-wide behaviour.
+**Blocker:** Do not enable retries on `charge` before idempotency keys exist.
+**Questions to council:** One shared breaker across dependencies, or one per dependency?
 
 #### appsec-architect (sonnet)
-**Stance:** proceed
+**Stance:** block
 **Top findings:**
-- Bearer token must never be logged; confirm no client logs full request headers.
-- Token lifetime/refresh is out of scope for the demo but should be named as a
-  follow-up so it isn't silently forgotten.
-**Blocker (if any):** none
-**Questions to council:** Where does the token come from at runtime?
+- Idempotency key must be derived from the *logical operation* (`order_id`), not a
+  random per-attempt value, or retries won't dedupe.
+- Retries must never replay on 4xx (a declined card retried looks like abuse).
+**Blocker:** Same as staff — idempotency is a precondition for retries on the money path.
+**Questions to council:** Where is the idempotency ledger stored, and for how long?
+
+#### cloud-cost-architect (sonnet)
+**Stance:** caution
+**Top findings:**
+- Exponential backoff **without jitter** synchronises retries into a thundering
+  herd that hammers Stripe exactly as it recovers.
+- Unbounded retries during an outage multiply spend and prolong the outage; the
+  breaker is what bounds it.
+**Blocker:** none
+**Questions to council:** Max retry count and breaker threshold?
 
 #### senior-backend-engineer (haiku)
 **Stance:** proceed
 **Top findings:**
-- `get_current_auth()` is the natural single source; both clients should depend on
-  it rather than importing an auth class directly.
-**Blocker (if any):** none
+- A single `resilience.py` transport that both clients call keeps the policy in one
+  place; clients stay thin.
+**Blocker:** none
 
 #### lead-sdet (haiku)
 **Stance:** caution
 **Top findings:**
-- Need a symmetry test asserting every client's header key post-refactor, so a
-  missed client is caught by CI, not production.
-**Blocker (if any):** none
+- Backoff + jitter is non-deterministic; the sleep and jitter source must be
+  injectable or tests will be flaky.
+**Blocker:** none
 
 ### Round 2 — Council Debate
 
-- **staff-engineer → whole council:** given the demo has one active consumer, a
-  dual-auth transition window adds test surface with no benefit. Council converges
-  on a **hard cutover** across the four files, landing together.
-- **appsec-architect:** accepts hard cutover; reiterates "no header logging" and
-  files token-refresh as an explicit out-of-scope follow-up.
-- **lead-sdet:** symmetry test is cheap insurance; backend-engineer agrees to make
-  `get_current_auth()` the sole accessor so the test has a single anchor.
+- **staff ↔ appsec:** converge immediately — idempotency is a hard precondition.
+  The transport must apply the idempotency key *before* the retry loop, so a retry
+  reuses the key. This resolves both blockers by construction (ordering, not a veto).
+- **cloud-cost → all:** jitter and a breaker are not optional polish; without them
+  the retry feature is a net negative under outage. Council agrees to make **full
+  jitter + circuit breaker** required modifications, not stretch goals.
+- **staff (breaker question):** one breaker *per dependency* (Stripe vs GitHub fail
+  independently); backend-engineer agrees the transport keys the breaker by base URL.
+- **lead-sdet:** transport takes an injectable `sleep`/`rng` so backoff is testable.
 
 ### Converged Concerns
 
-- **Atomic cutover** (staff-engineer + lead-sdet): all four files must change
-  together; a straggler fails silently at call time.
-- **Single accessor** (staff-engineer + senior-backend-engineer): clients depend
-  on `get_current_auth()`, not on an auth class directly.
+- **Idempotency-before-retry** (staff + appsec): retries on `charge` are unsafe until
+  a logical-operation idempotency key exists. Highest signal — two independent blocks.
+- **Retry storm** (cloud-cost + staff): backoff needs full jitter and a breaker or it
+  amplifies outages.
 
 ### Blocking Concerns
 
-None. No human overrides required.
+- **BLOCKER (resolved):** "retries before idempotency" on the money path (raised by
+  staff + appsec). Resolution: the transport applies the idempotency key first and
+  short-circuits an already-succeeded key; retries live strictly behind it. Encoded
+  as the ordered dependency list in the ADR Decision. No override needed — resolved
+  by design.
 
 ### Phase 5 — Human Input
 
-- Token source: injected via env at runtime (out of scope for the demo, noted).
-- Approves hard cutover and the symmetry test as the CI canary.
+- Idempotency ledger: in-memory for the demo; keyed by `order_id`; TTL out of scope
+  (noted as a production follow-up).
+- Retry policy: max 3 attempts, base 100ms, full jitter. Breaker: open after 5
+  consecutive failures, 30s cool-down.
+- **Human override (recorded):** council preferred distributed breaker state (Redis)
+  so a fleet trips together. *Indranil overrode:* "single-instance demo; a
+  per-process breaker is honest for the scope and I don't want Redis on stage."
+  Rationale accepted; **ADR-0002** filed for distributed coordination as an explicit
+  follow-up.
 
 ### Final Synthesis
 
-Proceed with a hard cutover: introduce `BearerTokenAuth` with a `.headers`
-property, make `get_current_auth()` return it, update both clients + `main.py` to
-build headers from `auth.headers`, and add a symmetry test on header keys.
-Token refresh is an explicit follow-up, not part of this change.
+Proceed with modifications. Build `demo/resilience.py` as a transport that applies a
+logical-operation idempotency key, then bounded retries (max 3, base 100ms, full
+jitter, transient-only) behind a per-dependency circuit breaker (open after 5
+failures, 30s cool-down). Route `StripeClient.charge` and
+`GitHubClient.create_receipt_issue` through it; `main.py` orchestration unchanged.
+`sleep`/`rng` injectable for deterministic tests. Distributed breaker deferred to
+ADR-0002.
 
 ### Decision
 
-- [x] Proceed as-is
-- [ ] Proceed with modifications
+- [ ] Proceed as-is
+- [x] Proceed with modifications: full jitter + per-dependency circuit breaker are in
+  scope; idempotency lands before retries; injectable sleep/rng
 - [ ] Redesign required
 
 ### Action Items
 
 | Item | Owner | Priority |
 |---|---|---|
-| Implement BearerTokenAuth + `.headers`, cut over 4 files atomically | human/agent | P0 |
-| Symmetry test asserting each client's header key | lead-sdet | P0 |
-| Follow-up ADR for token lifetime/refresh | appsec-architect | P2 |
+| `resilience.py`: idempotency → retry(jitter) → breaker, injectable sleep/rng | human/agent | P0 |
+| Route `charge` + `create_receipt_issue` through the transport | human/agent | P0 |
+| Deterministic tests for backoff, dedupe, and breaker-open | lead-sdet | P0 |
+| ADR-0002 — distributed circuit-breaker coordination | staff-engineer | P2 |
+| Idempotency ledger TTL / persistence for production | appsec-architect | P2 |

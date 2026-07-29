@@ -14,7 +14,7 @@ this tool supplies the ground-truth diff between planned and actual file surface
 
 Usage:
     python audit_trace.py --session 20260509/a1b2c3d4
-    python audit_trace.py --session 20260509/a1b2c3d4 --adr docs/adr/ADR-0001-bearer-token-auth.md
+    python audit_trace.py --session 20260509/a1b2c3d4 --adr docs/adr/ADR-0001-resilient-idempotent-checkout.md
     python audit_trace.py --session 20260509/a1b2c3d4 --json
 
 Exit code: 0 if faithful (no drift), 1 if drift detected or inputs missing.

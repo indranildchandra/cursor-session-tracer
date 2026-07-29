@@ -1,175 +1,134 @@
 """
-Tests for demo/ — the PRE-refactor state (starting point for the live demo).
+Tests for demo/ — the NAIVE starting state (the target of the live demo).
 
-Asserts that:
-- APIKeyAuth is used everywhere (X-API-Key header pattern)
-- get_current_auth() returns APIKeyAuth
-- No client uses BearerTokenAuth
+These assert the demo is at its *starting point*: the checkout flow charges and
+records a receipt with unguarded, non-idempotent calls, and no resilience module
+exists yet. They double as a canary — if demo/ is accidentally left in the
+post-implementation state (resilience added), these fail loudly before a talk.
+
+The decision to fix this state is docs/adr/ADR-0001-resilient-idempotent-checkout.md.
 """
 
 import sys
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from demo.auth import APIKeyAuth, BearerTokenAuth, get_current_auth
+from demo.auth import BearerTokenAuth, get_current_auth
 from demo.clients.github import GitHubClient
 from demo.clients.stripe import StripeClient
 from demo.main import app
 
+REPO_ROOT = Path(__file__).parent.parent
 client = TestClient(app)
 
 
 # ---------------------------------------------------------------------------
-# demo/auth.py — pre-refactor state
+# Auth is already solved (not the focus) — BearerTokenAuth throughout
 # ---------------------------------------------------------------------------
 
-class TestAPIKeyAuth:
-    def test_headers_use_x_api_key(self):
-        auth = APIKeyAuth(api_key="test-key")
-        assert auth.headers == {"X-API-Key": "test-key"}
+class TestAuth:
+    def test_bearer_headers(self):
+        assert BearerTokenAuth(token="tok").headers == {"Authorization": "Bearer tok"}
 
-    def test_is_valid_when_key_set(self):
-        assert APIKeyAuth(api_key="any-key").is_valid() is True
+    def test_get_current_auth_is_bearer(self):
+        assert isinstance(get_current_auth(), BearerTokenAuth)
 
-    def test_is_valid_false_when_no_key_and_no_env(self, monkeypatch):
-        # Passing "" falls back to the env var / default; must unset the env var too
-        monkeypatch.delenv("API_KEY", raising=False)
-        auth = APIKeyAuth(api_key=None)
-        # default fallback "demo-key-12345" is still set, so is_valid is True — correct behaviour
-        assert auth.is_valid() is True
-
-    def test_is_valid_false_when_env_is_empty(self, monkeypatch):
-        monkeypatch.setenv("API_KEY", "")
-        auth = APIKeyAuth(api_key=None)
-        assert auth.is_valid() is False
-
-    def test_default_key_from_env(self, monkeypatch):
-        monkeypatch.setenv("API_KEY", "env-key")
-        assert APIKeyAuth().api_key == "env-key"
-
-    def test_default_key_fallback(self, monkeypatch):
-        monkeypatch.delenv("API_KEY", raising=False)
-        assert APIKeyAuth().api_key == "demo-key-12345"
+    def test_clients_use_bearer(self):
+        assert "Authorization" in StripeClient().auth.headers
+        assert "Authorization" in GitHubClient().auth.headers
 
 
-class TestBearerTokenAuth:
-    def test_headers_use_authorization_bearer(self):
-        auth = BearerTokenAuth(token="my-token")
-        assert auth.headers == {"Authorization": "Bearer my-token"}
+# ---------------------------------------------------------------------------
+# The naive starting state — this is what ADR-0001 sets out to change
+# ---------------------------------------------------------------------------
 
-    def test_is_valid_when_token_set(self):
-        assert BearerTokenAuth(token="tok").is_valid() is True
-
-    def test_is_valid_false_when_empty(self):
-        assert BearerTokenAuth(token="").is_valid() is False
-
-
-class TestGetCurrentAuthPreRefactor:
-    def test_returns_api_key_auth(self):
-        """PRE-refactor: get_current_auth must return APIKeyAuth, not BearerTokenAuth."""
-        auth = get_current_auth()
-        assert isinstance(auth, APIKeyAuth), (
-            "demo/ is the PRE-refactor state. get_current_auth() must return APIKeyAuth. "
-            "If this fails, demo/ was accidentally left in post-refactor state."
+class TestNaiveStartingState:
+    def test_charge_has_no_idempotency_key(self):
+        """The premise of ADR-0001: charge() is not idempotent yet."""
+        params = StripeClient.charge.__code__.co_varnames
+        assert "idempotency_key" not in params, (
+            "demo/ is the PRE-implementation state. StripeClient.charge must NOT take an "
+            "idempotency_key yet — that is what ADR-0001 introduces. If this fails, demo/ "
+            "was left in the post-implementation state."
         )
 
-    def test_does_not_return_bearer_token_auth(self):
-        auth = get_current_auth()
-        assert not isinstance(auth, BearerTokenAuth)
+    def test_retrying_a_charge_double_charges(self):
+        """Two identical charges create two distinct charges — the double-charge bug."""
+        sc = StripeClient()
+        first = sc.charge("cus_1", 5000)
+        second = sc.charge("cus_1", 5000)
+        assert first["id"] != second["id"]
+        assert len(sc.charges) == 2, "retry must double-charge in the naive state"
 
-    def test_auth_headers_use_x_api_key(self):
-        auth = get_current_auth()
-        assert "X-API-Key" in auth.headers
-        assert "Authorization" not in auth.headers
-
-
-# ---------------------------------------------------------------------------
-# demo/clients/ — pre-refactor state
-# ---------------------------------------------------------------------------
-
-class TestGitHubClientPreRefactor:
-    def test_uses_api_key_auth(self):
-        """GitHub client must use APIKeyAuth in the pre-refactor state."""
-        gh = GitHubClient()
-        assert isinstance(gh.auth, APIKeyAuth), (
-            "GitHubClient should use APIKeyAuth in demo/ (pre-refactor). "
-            "Move BearerTokenAuth version to demo_post_changes/."
+    def test_no_resilience_module_yet(self):
+        """Canary: demo/resilience.py is what the agent creates during the demo."""
+        assert not (REPO_ROOT / "demo" / "resilience.py").exists(), (
+            "demo/resilience.py exists — demo/ appears to be in the POST-implementation "
+            "state. Reset demo/ to its naive starting point before the talk."
         )
 
-    def test_auth_header_is_x_api_key(self):
-        gh = GitHubClient()
-        assert "X-API-Key" in gh.auth.headers
 
-    def test_get_repo_returns_dict(self):
-        gh = GitHubClient()
-        result = gh.get_repo("torvalds", "linux")
-        assert result["owner"] == "torvalds"
-        assert result["repo"] == "linux"
-        assert "X-API-Key" in result["auth_headers"]
+# ---------------------------------------------------------------------------
+# Client behaviour in the starting state
+# ---------------------------------------------------------------------------
 
-    def test_get_repo_url_format(self):
+class TestStripeClient:
+    def test_charge_shape(self):
+        sc = StripeClient()
+        charge = sc.charge("cus_42", 1299, currency="usd")
+        assert charge["customer_id"] == "cus_42"
+        assert charge["amount_cents"] == 1299
+        assert charge["currency"] == "usd"
+        assert charge["status"] == "succeeded"
+        assert charge["url"] == "https://api.stripe.com/v1/charges"
+
+    def test_get_payment(self):
+        result = StripeClient().get_payment("pi_9")
+        assert result["payment_id"] == "pi_9"
+        assert result["url"] == "https://api.stripe.com/v1/payment_intents/pi_9"
+
+
+class TestGitHubClient:
+    def test_create_receipt_issue(self):
         gh = GitHubClient()
-        result = gh.get_repo("octocat", "hello-world")
+        r1 = gh.create_receipt_issue("acme", "receipts", "order-1", 1299)
+        r2 = gh.create_receipt_issue("acme", "receipts", "order-1", 1299)
+        assert r1["order_id"] == "order-1"
+        assert r1["issue_number"] != r2["issue_number"]  # not idempotent either
+        assert r1["url"] == "https://api.github.com/repos/acme/receipts/issues"
+
+    def test_get_repo(self):
+        result = GitHubClient().get_repo("octocat", "hello-world")
         assert result["url"] == "https://api.github.com/repos/octocat/hello-world"
 
 
-class TestStripeClientPreRefactor:
-    def test_uses_api_key_auth(self):
-        """Stripe client must use APIKeyAuth in the pre-refactor state."""
-        sc = StripeClient()
-        assert isinstance(sc.auth, APIKeyAuth), (
-            "StripeClient should use APIKeyAuth in demo/ (pre-refactor). "
-            "Move BearerTokenAuth version to demo_post_changes/."
-        )
-
-    def test_auth_header_is_x_api_key(self):
-        sc = StripeClient()
-        assert "X-API-Key" in sc.auth.headers
-
-    def test_get_payment_returns_dict(self):
-        sc = StripeClient()
-        result = sc.get_payment("pi_123")
-        assert result["payment_id"] == "pi_123"
-        assert "X-API-Key" in result["auth_headers"]
-
-    def test_get_payment_url_format(self):
-        sc = StripeClient()
-        result = sc.get_payment("pi_abc")
-        assert result["url"] == "https://api.stripe.com/v1/payment_intents/pi_abc"
-
-
 # ---------------------------------------------------------------------------
-# demo/main.py HTTP endpoints — pre-refactor state
+# HTTP surface
 # ---------------------------------------------------------------------------
 
-class TestDemoAppEndpoints:
+class TestCheckoutEndpoint:
     def test_health(self):
         resp = client.get("/health")
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
 
-    def test_get_repo(self):
-        resp = client.get("/repos/torvalds/linux")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["owner"] == "torvalds"
-        assert data["repo"] == "linux"
-
-    def test_get_payment(self):
-        resp = client.get("/payment/pi_test123")
-        assert resp.status_code == 200
-        assert resp.json()["payment_id"] == "pi_test123"
-
-    def test_auth_validate_returns_api_key_auth(self):
-        """PRE-refactor: /auth/validate must report APIKeyAuth type."""
-        resp = client.get("/auth/validate")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["auth_type"] == "APIKeyAuth", (
-            "demo/ is the pre-refactor app. /auth/validate must return auth_type=APIKeyAuth. "
-            "Post-refactor version is in demo_post_changes/."
+    def test_checkout_returns_charge_and_receipt(self):
+        resp = client.post(
+            "/checkout",
+            json={"customer_id": "cus_1", "amount_cents": 2500, "order_id": "o-100"},
         )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["charge"]["amount_cents"] == 2500
+        assert body["receipt"]["order_id"] == "o-100"
+
+    def test_checkout_is_not_idempotent(self):
+        """Two checkouts with the same order_id both succeed and both charge."""
+        payload = {"customer_id": "cus_2", "amount_cents": 999, "order_id": "o-dup"}
+        first = client.post("/checkout", json=payload)
+        second = client.post("/checkout", json=payload)
+        assert first.status_code == second.status_code == 200
+        assert first.json()["charge"]["id"] != second.json()["charge"]["id"]

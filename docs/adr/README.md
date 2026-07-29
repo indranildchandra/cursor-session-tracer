@@ -37,7 +37,7 @@ changed that the ADR never put in scope.
 python audit_trace.py --session 20260509/a1b2c3d4
 
 # Or point at a specific ADR:
-python audit_trace.py --session 20260509/a1b2c3d4 --adr docs/adr/ADR-0001-bearer-token-auth.md
+python audit_trace.py --session 20260509/a1b2c3d4 --adr docs/adr/ADR-0001-resilient-idempotent-checkout.md
 
 # Machine-readable, for a PR comment / CI gate (exit 1 on drift):
 python audit_trace.py --session 20260509/a1b2c3d4 --json

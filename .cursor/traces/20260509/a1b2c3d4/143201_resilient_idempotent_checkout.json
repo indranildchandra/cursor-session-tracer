@@ -1,0 +1,98 @@
+{
+  "session": {
+    "session_id": "a1b2c3d4",
+    "slug": "resilient_idempotent_checkout",
+    "task": "Implement ADR-0001: resilient, idempotent outbound calls for the checkout flow",
+    "adr_id": "ADR-0001",
+    "started_at": "2026-05-09T14:32:01Z",
+    "ended_at": "2026-05-09T14:41:37Z",
+    "outcome": "completed",
+    "repo_snapshot": [
+      "demo/resilience.py",
+      "demo/clients/stripe.py",
+      "demo/clients/github.py",
+      "demo/main.py"
+    ],
+    "cursor_stats": {
+      "composer_id": "b7f3c1a0-9e2d-4a11-8c3f-1d2e3f4a5b6c",
+      "model": "claude-sonnet-4-5",
+      "tool_call_count": 6,
+      "tokens_in": 18420,
+      "tokens_out": 5130
+    }
+  },
+  "events": [
+    {
+      "step_id": "step_001",
+      "parent_step_id": null,
+      "type": "decision",
+      "timestamp": "2026-05-09T14:32:20Z",
+      "reason": "Following ADR-0001. The ordering constraint is load-bearing: idempotency must be applied before the retry loop, or retries turn the manual double-charge into an automatic one. Building a single transport rather than per-client retries so the policy lives in one seam.",
+      "files_read": ["demo/main.py", "demo/clients/stripe.py"],
+      "files_modified": [],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": "Scope per ADR-0001: resilience.py + both clients + main.py"
+    },
+    {
+      "step_id": "step_002",
+      "parent_step_id": "step_001",
+      "type": "file_create",
+      "timestamp": "2026-05-09T14:34:05Z",
+      "reason": "Create demo/resilience.py. Order of application: derive an idempotency key from the logical operation (order_id) and short-circuit an already-succeeded key; then a bounded retry loop (max 3, base 100ms, full jitter, transient failures only); all behind a per-dependency circuit breaker keyed by base URL. sleep/rng are injected so backoff is deterministic in tests.",
+      "files_read": [],
+      "files_modified": [],
+      "files_created": ["demo/resilience.py"],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_003",
+      "parent_step_id": "step_002",
+      "type": "file_modify",
+      "timestamp": "2026-05-09T14:36:12Z",
+      "reason": "Route StripeClient.charge through the transport with order_id as the idempotency key. This closes the double-charge bug: a retried charge reuses the key and dedupes instead of creating a second charge.",
+      "files_read": ["demo/clients/stripe.py"],
+      "files_modified": ["demo/clients/stripe.py"],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_004",
+      "parent_step_id": "step_003",
+      "type": "file_modify",
+      "timestamp": "2026-05-09T14:37:48Z",
+      "reason": "Route GitHubClient.create_receipt_issue through the same transport so the receipt write gets the same backoff + breaker. Keyed on the GitHub base URL so a GitHub outage trips independently of Stripe.",
+      "files_read": ["demo/clients/github.py"],
+      "files_modified": ["demo/clients/github.py"],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_005",
+      "parent_step_id": "step_004",
+      "type": "file_modify",
+      "timestamp": "2026-05-09T14:39:20Z",
+      "reason": "Wire main.py's /checkout to the updated clients. Orchestration is unchanged — the reliability policy now lives entirely in resilience.py, so main.py stays thin.",
+      "files_read": ["demo/main.py"],
+      "files_modified": ["demo/main.py"],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    },
+    {
+      "step_id": "step_006",
+      "parent_step_id": "step_005",
+      "type": "checkpoint",
+      "timestamp": "2026-05-09T14:41:30Z",
+      "reason": "Tests pass, including deterministic cases for backoff timing, idempotent-retry dedupe (no double charge), and circuit-breaker-open. Distributed breaker state deferred to ADR-0002 per the review's human override.",
+      "files_read": [],
+      "files_modified": [],
+      "files_created": [],
+      "files_deleted": [],
+      "notes": ""
+    }
+  ]
+}
