@@ -40,8 +40,11 @@ test: ## Run the test suite
 	$(BIN)/python -m pytest tests/ -q
 
 .PHONY: cov
-cov: ## Run the test suite with a coverage report
-	$(BIN)/python -m pytest tests/ --cov=src --cov=render_trace --cov=audit_trace --cov-report=term-missing
+cov: ## Run the suite with a coverage report (terminal + HTML in htmlcov/)
+	$(BIN)/python -m pytest tests/ \
+		--cov=src --cov=render_trace --cov=audit_trace \
+		--cov-report=term-missing --cov-report=html
+	@echo "\nHTML coverage report: open htmlcov/index.html"
 
 .PHONY: lint
 lint: ## Lint with ruff (needs: make dev)

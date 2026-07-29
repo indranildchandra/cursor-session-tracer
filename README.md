@@ -360,11 +360,13 @@ Verdict: the implementation drifted from the plan. Surface the drift for human r
 ## Testing
 
 ```bash
-make test        # run the suite            (or: .venv/bin/python -m pytest tests/ -q)
-make dev         # install dev/CI tooling    (ruff, pytest-cov)
-make cov         # suite + coverage report
+make test        # run the suite                       (or: .venv/bin/python -m pytest tests/ -q)
+make dev         # install dev/CI tooling               (ruff, pytest-cov) — run once
+make cov         # suite + coverage report (terminal + HTML → htmlcov/index.html)
 make lint        # ruff check .
 ```
+
+`make cov` prints a per-file coverage table (with the missing line numbers) and writes a browsable HTML report to `htmlcov/index.html`. Under the hood it's `pytest --cov=src --cov=render_trace --cov=audit_trace --cov-report=term-missing --cov-report=html`, so you can run that directly too. (`make dev` installs `pytest-cov` first; `htmlcov/` and `.coverage` are gitignored.)
 
 **110 tests, ~94% line coverage, nothing skipped**, validated on **Python 3.12** and enforced in [CI](.github/workflows/ci.yml) on every push/PR (lint + tests + a dogfood step that re-audits the sample trace). Coverage spans the file utilities, all three MCP tools (incl. `adr_id` linking), the cross-platform Cursor-DB reader, the FastAPI endpoints, both renderers (including their CLIs), the plan-vs-path audit (functions **and** CLI), and a canary suite over the demo's starting state — `tests/test_demo.py` fails loudly if `demo/` is left in the post-implementation state before a talk.
 
