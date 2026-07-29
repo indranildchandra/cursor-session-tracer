@@ -1,168 +1,199 @@
-# Cursor Session Tracer
+# Cursor Session Tracer — Design Plan
 
-## Agentic Observability for Production Engineering Teams
+## Plan vs. Path: pairing an implementation trace with the decision that authorised it
 
 **Talk + Build Design Document**
-Indranil Chandra | Cursor Community Meetup Mumbai | May 2026
+Indranil Chandra
+
+> This is the **current** design document. It supersedes the first edition (v1,
+> *"When the Agent Drives, Who Holds the Wheel?"*, Cursor Community Meetup Mumbai,
+> May 2026), which shipped the tracer alone. v2 adds the other half of the story —
+> the **plan** — and the check that ties plan to path.
 
 [Talk Deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/view)
 
 ---
 
-## 1. Event and Audience Context
+## 0. What changed since v1 (read this first)
 
-### 1.1 Event
+v1 answered *"what did the agent actually do?"* with a real-time reasoning **trace**.
+It was a good answer to half a question. v2 adds the missing half:
 
-- Cursor Community Meetup Mumbai -- second edition, official Cursor community event
-- Format: talks + demos from power users, Q&A with Cursor team member, open networking
+| | v1 (May 2026) | v2 (current) |
+|---|---|---|
+| **Trace** — the *path* | ✅ three MCP tools, real-time reasoning graph | ✅ unchanged, plus a link back to the plan (`adr_id`) |
+| **Cursor usage stats** | self-reported at `end_trace` | **auto-captured** from Cursor's local SQLite DB |
+| **Plan** — the *ADR* | ✗ none | ✅ produced by an **adversarial review council** (`/design-review`) |
+| **Plan-vs-path check** | ✗ none | ✅ `audit_trace.py` flags **LLD drift** |
+| **Skill packaging** | n/a | Cursor-native (`.cursor/commands`, `.cursor/review-council`) |
+| **Demo** | auth refactor (`APIKeyAuth → BearerTokenAuth`) | **resilient, idempotent checkout** — a decision worth reviewing |
 
-### 1.2 Audience Profile
-
-Based on the prior Mumbai edition and comparable Cursor community meetups globally:
-
-- **Primary:** Senior individual contributors and founding engineers at Mumbai startups who use Cursor daily and have moved past onboarding. Not people learning what Cursor is. They have already run agentic sessions, felt the pain, and have opinions.
-- **Secondary:** Technical founders and CTOs evaluating or scaling Cursor adoption across their engineering teams. They care about ROI, team velocity, and governance.
-- **Tertiary:** Engineering managers at growth-stage companies (the first Mumbai meetup had speakers from CleverTap, which signals this tier is present). They want something they can take back and justify.
-
-### 1.3 What This Audience Has Already Seen
-
-Assume they have seen: Cursor tips and workflow talks, MCP server demos, rules and notepads walkthroughs, background agent introductions. Do not open with basics. Open with a failure.
-
-### 1.4 What This Audience Has Not Seen
-
-- A systematic treatment of what happens after a large agentic session -- the debugging, the audit, the PR review problem
-- A working observability layer built on top of Cursor's own agentic loop using MCP
-- The framing of agentic amnesia as a named, architectural problem class -- not just a vague frustration
+The through-line: a record is only trustworthy if it is a **byproduct of the work**,
+not a separate artefact someone must remember to update. The trace is a byproduct of
+implementation; the ADR is a byproduct of planning. Neither drifts.
 
 ---
 
-## 2. Talk Design
+## 1. Audience & framing
 
-### 2.1 Title and Thesis
+### 1.1 Setting
 
-**Title:** When the Agent Drives, Who Holds the Wheel?
+Internal PubMatic brownbag. Bimodal audience:
 
-**One-line thesis:** Cursor's agentic mode is powerful enough to restructure your codebase in one session. That power creates a new class of debugging problem that your existing mental models -- step debuggers, unit tests, git blame -- were not designed to handle. This talk names that problem and ships a working solution in front of you.
+- **Senior leaders** — care about ROI, review cost, onboarding cost, audit-readiness,
+  and governance of agent-driven work at scale.
+- **On-floor engineers** — care about whether this slows them down, how it works, and
+  whether it is ceremony or a byproduct of work they already do.
 
-### 2.2 The Core Insight
+The talk must land for both: name the business "so what" for leaders, and pre-empt the
+"this is process tax" reflex for engineers (the ADR + trace are byproducts, not extra steps).
 
-Git blame tells you what changed and when. The trace tells you why the agent made that sequence of decisions. During a prod incident, the difference between those two is the difference between "I can see line 847 changed" and "I understand that the agent changed line 847 because it misread the auth contract in config.py three steps earlier."
+### 1.2 The two named problems
 
-Senior engineers doing PR review currently have no choice but to reverse-engineer agent intent from code output. The trace gives them the reasoning chain upfront. That is a new debugging primitive, not an incremental improvement on existing tooling.
+1. **Agentic amnesia.** When an agent reads 20 files and rewrites 40 in one session,
+   it leaves the output and nothing else — no reasoning, no PR narrative, no Slack
+   thread. By the time something breaks 48 hours later, there is no reasoning trail.
+2. **Documentation drift.** On long-lived brownfield projects, `docs/` is written once
+   and never kept honest. This is structural, not a discipline failure: docs and code
+   are two artefacts with no feedback loop between them.
 
-### 2.3 The Named Problem: Agentic Amnesia
+Both have the same cure: make the record a **byproduct** of the work at the moment the
+work happens.
 
-The problem is not that the agent makes bad changes. The problem is that there is no decision trace. No record of what the agent read before deciding, what alternatives it considered, what order it modified files in, why it chose approach A over approach B.
+### 1.3 HLD has ADRs; LLD had nothing
 
-A human engineer would have left comments, a PR description, a Slack thread. The agent leaves nothing except the output. We call this **agentic amnesia**. The agent has no memory of its own reasoning by the time you need to investigate.
-
-### 2.4 The Business Framing
-
-This is not just a debugging tool. This is the missing layer between "AI wrote this" and "engineer owns this." Every organisation adopting Cursor at scale will need something like this -- not because they distrust the AI, but because software ownership requires a reasoning trail. Accountability does not disappear when the agent writes the code. It just gets harder to assign.
-
-Teams that instrument their agentic workflows now will have an audit-ready, review-friendly, onboardable codebase. Teams that don't will accumulate **agentic debt** -- code that works but that no one can explain.
-
----
-
-## 3. Talk Structure
-
-### Minutes 0 to 3: The Failure Scenario
-
-Open with a real situation, told as a story. No slides required. Talk to the room.
-
-The scenario: you kick off an agentic session in Cursor. The task is meaningful -- something like "refactor all API clients to use the new token-based auth pattern." The agent runs. It reads files, makes decisions, modifies 40-odd files across the codebase. You review the diff, it looks broadly correct, you commit. Forty-eight hours later something breaks in production. Git bisect points you to the agentic commit. The diff is a wall of noise. You have no idea which of the 40 changes introduced the regression, or why the agent made the specific sequencing decision that led to it.
-
-Pause. Ask the room: how many of you have felt exactly this? Let that land for three seconds.
-
-Then say: the problem is not that the agent made a bad change. The problem is that the agent left no reasoning trail. We have a name for this. Agentic amnesia.
-
-### Minutes 3 to 8: The Problem Framing
-
-Introduce the comparison that makes the problem precise:
-
-- **Git history:** what changed, when, by whom
-- **Step debugger:** what is executing right now, what is the call stack
-- **Unit test failure:** which assertion broke, on which input
-- **Agentic session trace:** why did the agent make this decision, given what it had read, at that point in the session
-
-These are different questions. None of the first three answer the fourth. The fourth is new. It exists because agentic coding is a new execution model, not just a faster version of autocomplete.
-
-Then set up the solution: what if every agentic session left behind a structured trace -- a decision log that maps reasoning to file changes, step by step, with parent-child relationships between decisions? What could you do with that?
-
-- Debug a prod regression by walking the trace instead of the diff
-- Give a senior engineer the reasoning chain before they open the PR
-- Build an org-level knowledge graph of agent behavior across sessions, across engineers, across the codebase -- and start answering which files agents touch most, which decision patterns precede prod failures
-
-### Minutes 8 to 16: The Live Demo
-
-Transition: "Let me show you what this looks like running inside Cursor right now."
-
-**Demo setup (pre-loaded, do not explain setup live):**
-
-- A small demo repo open in Cursor -- a Flask or FastAPI app, ~8 files, with a clear architectural seam to refactor
-- MCP server already running locally
-- Cursor rule already in `.cursor/rules/`
-- VS Code split pane: left is Cursor agent, right is terminal watching the trace file
-
-**What you do live:**
-
-- Open Cursor agent mode, type a meaningful multi-file task -- something the audience recognises as real work, not a toy example
-- Show that before the agent starts modifying anything, it calls `start_trace` -- session ID returned, trace file created, visible in the file tree
-- Let the agent run 3 to 5 steps -- enough for the trace file to accumulate 4 to 6 events with parent_step_id chains forming
-- At a natural pause point, switch to terminal and run `render_trace.py` -- the decision tree prints to stdout, showing the reasoning chain with file references
-- End the session with `end_trace`, show the outcome field written
-- Pull up the rendered tree again -- walk through one specific decision and show how you would use this during a prod incident or PR review
-
-**What the demo proves:**
-
-- The MCP tool integration works inside Cursor's agentic loop without friction
-- The trace file is human-readable in real time, not post-processed
-- The reasoning chain is queryable immediately after the session ends
-- The whole thing is local, zero-dependency, works in any repo
-
-### Minutes 16 to 20: The Systems-Level Punchline
-
-Pull back from the demo. No more technical detail. Talk to the whole room.
-
-What you just saw is the v0 of something larger. The data model underneath this is a graph -- every decision is a node, every file touch is an edge, every parent-step relationship is a directed dependency. Right now it lives in a JSON file. At org scale, this is a Neo4j graph that lets you query across sessions, across engineers, across the entire history of agent-assisted development in your codebase.
-
-The question this enables -- and this is the question that matters for every team scaling Cursor adoption -- is not "did the agent write correct code." Linters and tests answer that. The question is: "did the agent reason correctly to get there, and can a human engineer follow that reasoning six months from now."
-
-Close: the gap between AI-assisted development and AI-owned development is observability. We have 30 years of tooling for observing what code does at runtime. We have almost nothing for observing how agent reasoning produced that code. That is the problem worth solving. This is a start.
+ADRs capture the *why* behind high-level structural choices — but they stop at the
+system boundary. What happens **inside** a module, why a function was refactored, what
+the agent decided mid-session — the LLD layer has had no equivalent of an ADR. The
+**trace is that missing LLD record**, and `adr_id` ties it back to the HLD decision.
 
 ---
 
-## 4. Trace File Schema
+## 2. Talk design
 
-### 4.1 Directory Structure
+### 2.1 Title and thesis
+
+**Title:** Your Code and its Story — Told by Adversarial Review & Cursor Session Tracer
+**Tagline:** *Docs drift, traces don't.*
+
+**Thesis:** Every change has two truths — what you *planned* and what you *did*. Capture
+the plan as an **ADR forged in adversarial review**, capture the path as a **real-time
+trace**, and check one against the other automatically. Together they replace the
+drifting `docs/` folder with two artefacts that move with the code, and they make the
+"PR of the future" — code + plan + path — reviewable by a human or an agent.
+
+### 2.2 The core insight
+
+- **Git blame** tells you *what* changed. **The trace** tells you *why* the agent
+  decided to change it, in what order, given what it had read.
+- **An ADR** tells you *what you meant to do and why*. **The audit** tells you whether
+  the path stayed faithful to that plan, or drifted.
+
+Plan vs. path, intent vs. execution — permanently recorded, not reconstructed from git
+blame months later.
+
+### 2.3 Business framing (for the leaders in the room)
+
+This is the missing layer between "AI wrote this" and "an engineer owns this."
+Accountability does not disappear when the agent writes the code; it just gets harder to
+assign. Teams that instrument now get an audit-ready, review-friendly, onboardable
+codebase. Teams that don't accumulate **agentic debt** — code that works but that no one
+can explain — and pay it back at incident time.
+
+### 2.4 Honest limitations (name them yourself)
+
+Credibility comes from naming the cost: adversarial review adds compute + latency;
+traces add storage + noise; ADRs need maintenance when the plan changes mid-flight; and
+small changes don't warrant either. The tool is for decisions a reviewer would want to
+understand in three weeks — not every one-line edit.
+
+---
+
+## 3. Talk structure
+
+Delivered **demo-first** (show it working, then explain) — the speaker manages timing
+live; the outline below is content, not a stopwatch.
+
+1. **Cold open — the confession.** "I built a tool to fight documentation drift. Its own
+   README had drifted from its code. That's not a discipline failure — that's how
+   structural this problem is." Disarms the room; proves the thesis in 20 seconds.
+2. **The demo (shown first).** The naive checkout with the double-charge bug →
+   `/design-review` produces an ADR with a real blocker and a converged concern →
+   implement with the tracer running → `audit_trace.py` shows plan vs. path. (See §11.)
+3. **The gap.** HLD has ADRs; LLD has had nothing. The trace is the missing LLD record.
+   The four questions: git history / step debugger / unit test / **agentic trace**.
+4. **Two artefacts, one system.** ADR = plan (adversarial review), trace = path
+   (implementation), audit = the check. Code, ADR, and trace move together.
+5. **The PR of the future.** A PR ships as code + ADR + trace. An independent
+   reviewer — increasingly an agent — reasons about faithfulness-to-plan and flags LLD
+   drift, instead of reverse-engineering intent from the diff.
+6. **The systems punchline.** The trace is a graph; today it's JSON, tomorrow a
+   ClickHouse/Neo4j store answering cross-session questions. We have 30 years of runtime
+   observability and almost none for agent reasoning. This is a start on the gap.
+
+---
+
+## 4. System architecture — the plan-vs-path loop
+
+```
+  /design-review                start_trace(adr_id=…)              audit_trace.py
+ ┌────────────────┐   ADR      ┌────────────────────┐  trace     ┌──────────────────┐
+ │ adversarial     │ ────────▶ │ implement with the  │ ─────────▶ │ plan vs. path:    │
+ │ review council  │  (plan)    │ tracer running      │  (path)    │ flag LLD drift    │
+ │ .cursor/commands│            │ src/mcp_server.py    │            │ audit_trace.py    │
+ └────────────────┘            └────────────────────┘            └──────────────────┘
+        │                               │                                  │
+        ▼                               ▼                                  ▼
+ docs/adr/ADR-NNNN.md          .cursor/traces/…/*.json            FAITHFUL | DRIFT (exit 1)
+ docs/design-review.md         (adr_id links back to the ADR)     → PR comment / CI gate
+```
+
+| Component | Path | Role |
+|---|---|---|
+| `review-council` | `.cursor/commands/design-review.md` + `.cursor/review-council/` | Adversarial review → **ADR** |
+| MCP tracer | `src/mcp_server.py`, `src/app.py`, `src/cursor_db.py` | Real-time **trace** |
+| Renderer | `render_trace.py` | Trace → terminal tree / Mermaid |
+| Auditor | `audit_trace.py` | ADR scope vs. trace touches → **drift** |
+
+---
+
+## 5. Trace file schema
+
+### 5.1 Directory structure
 
 ```text
 .cursor/traces/
   20260509/
     a1b2c3d4/
-      143201_refactor_auth_clients.json
-      151432_refactor_auth_clients.json    <- restart, visible by design
+      143201_resilient_idempotent_checkout.json
+      151432_resilient_idempotent_checkout.json    <- restart, visible by design
 ```
 
-- **Date directory:** `YYYYMMDD` -- created at `start_trace` call time
-- **Session directory:** `uuid4[:8]` -- generated by `start_trace`, returned to agent, passed on all subsequent calls
-- **Filename:** `HHMMSS_<slug>.json` -- HHMMSS is wall clock at `start_trace`, slug is auto-generated from `task_description` (first 5 words, lowercased, underscored, punctuation stripped)
-- **Multiple files under same session_id:** acceptable by design. Restart artifact. Do not suppress.
+- **Date directory:** `YYYYMMDD`, created at `start_trace` time.
+- **Session directory:** `uuid4()[:8]`, returned to the agent, passed on every call.
+- **Filename:** `HHMMSS_<slug>.json` — slug = first 5 words of `task_description`,
+  lowercased, underscored, punctuation stripped.
+- **Multiple files under one session_id:** a restart artifact; kept by design.
 
-### 4.2 Session Header Block
+### 5.2 Session header block
 
-Written once by `start_trace`. `composer_id` and `model` are auto-detected from Cursor's local SQLite DB at `start_trace` time (both null if no live Cursor session is found). `ended_at`, `outcome`, `tokens_in`, and `tokens_out` remain null until `end_trace` is called, at which point token counts are summed from Cursor's DB. `tool_call_count` is auto-incremented on every `append_trace` call.
+Written once by `start_trace`. `adr_id` links the trace to the plan it implements
+(`null` if none). `composer_id` and `model` are auto-detected from Cursor's local SQLite
+DB at `start_trace` (both `null` if no live Cursor session). `ended_at`, `outcome`,
+`tokens_in`, `tokens_out` fill in at `end_trace`. `tool_call_count` increments on every
+`append_trace`.
 
 ```json
 {
   "session": {
     "session_id": "a1b2c3d4",
-    "slug": "refactor_auth_clients",
-    "task": "Refactor all API clients to use the new token-based auth pattern",
+    "slug": "resilient_idempotent_checkout",
+    "task": "Implement ADR-0001: resilient, idempotent outbound calls for checkout",
+    "adr_id": "ADR-0001",
     "started_at": "2026-05-09T14:32:01Z",
     "ended_at": null,
     "outcome": null,
-    "repo_snapshot": ["src/auth.py", "src/clients/github.py", "src/middleware.py"],
+    "repo_snapshot": ["demo/resilience.py", "demo/clients/stripe.py"],
     "cursor_stats": {
       "composer_id": "b7f3c1a0-9e2d-4a11-8c3f-1d2e3f4a5b6c",
       "model": "claude-sonnet-4-5",
@@ -175,345 +206,223 @@ Written once by `start_trace`. `composer_id` and `model` are auto-detected from 
 }
 ```
 
-### 4.3 Event Object
-
-Each call to `append_trace` appends one object to the `events` array.
+### 5.3 Event object
 
 ```json
 {
   "step_id": "step_003",
   "parent_step_id": "step_002",
   "type": "decision",
-  "timestamp": "2026-05-09T14:33:45Z",
-  "reason": "auth.py uses APIKeyAuth. Rewriting to BearerTokenAuth requires changing header construction in all downstream clients.",
-  "files_read": ["src/auth.py"],
-  "files_modified": ["src/clients/github.py"],
+  "timestamp": "2026-05-09T14:36:12Z",
+  "reason": "charge() has no idempotency key; a retry double-charges. Route it through the transport with order_id as the key.",
+  "files_read": ["demo/clients/stripe.py"],
+  "files_modified": ["demo/clients/stripe.py"],
   "files_created": [],
   "files_deleted": [],
   "notes": ""
 }
 ```
 
-### 4.4 Event Types
+Event types: `decision` · `file_read` · `file_modify` · `file_create` · `file_delete` ·
+`tool_call` · `checkpoint`. If Cursor's model changes mid-session, `append_trace` adds a
+`model_override` field to that event.
 
-- **decision:** Agent is choosing an approach. Most important event type. `reason` field must be specific.
-- **file_read:** Agent reads a file to understand structure before acting
-- **file_modify:** Agent modifies an existing file
-- **file_create:** Agent creates a new file
-- **file_delete:** Agent deletes a file
-- **tool_call:** Agent invokes an external tool (terminal, search, etc.)
-- **checkpoint:** Explicit human-triggered marker mid-session for long-running tasks
+### 5.4 The graph shape
 
-### 4.5 Graph Shape of the Schema
-
-The `parent_step_id` field is what makes this graph-shaped even though it is stored as flat JSON. Every event points to what caused it. When migrating to a graph database later:
-
-- Each event object becomes a node
-- Each `parent_step_id` reference becomes a directed edge between nodes
-- Each file reference (`files_read`, `files_modified`, etc.) becomes a second node type with edges from decision nodes to file nodes
-- Cross-session queries become possible: which files are most frequently touched by agents, which decision patterns precede prod failures
+`parent_step_id` makes this graph-shaped even as flat JSON: every event points to what
+caused it. Each event → a node; each `parent_step_id` → a directed edge; each file
+reference → an edge to a file node. This is what makes the future ClickHouse/Neo4j store
+(§12) a schema migration rather than a redesign.
 
 ---
 
-## 5. MCP Tool Specifications
+## 6. MCP tool specifications
 
-> Three tools only. More than three increases the probability of the agent making wrong tool choices mid-session.
+> Three tools only. More than three raises the chance of the agent picking the wrong one
+> mid-session.
 
-### 5.1 start_trace
+### 6.1 start_trace
 
 ```text
-start_trace(task_description: str, files_in_scope: list[str]) -> dict
+start_trace(task_description: str, files_in_scope: list[str], adr_id: str = "") -> dict
+# -> {"session_id": "a1b2c3d4", "trace_file_path": ".cursor/traces/.../….json"}
 ```
 
-**Returns:**
+- Generates `session_id` (`uuid4()[:8]`) and the slug; creates the date + session dirs.
+- Auto-detects `composer_id` + `model` from Cursor's DB.
+- Records `adr_id` (the plan this session implements) when supplied.
+- Writes the session header with `events: []`.
 
-```json
-{ "session_id": "a1b2c3d4", "trace_file_path": ".cursor/traces/20260509/a1b2c3d4/143201_refactor_auth_clients.json" }
-```
-
-**Behaviour:**
-
-- Generates `session_id`: `uuid4()[:8]`
-- Generates slug: `task_description` split on whitespace, first 5 tokens, lowercased, joined with underscores, non-alphanumeric characters stripped
-- Creates date directory and session_id directory if they do not exist
-- Writes the session header block with `events: []` to the JSON file
-- Returns `session_id` and `trace_file_path`
-
-**Agent instruction:** Agent must store the returned `session_id` and pass it to every subsequent `append_trace` and `end_trace` call.
-
-### 5.2 append_trace
+### 6.2 append_trace
 
 ```text
-append_trace(
-  session_id: str,
-  type: str,
-  reason: str,
-  files_read: list[str],
-  files_modified: list[str],
-  files_created: list[str],
-  files_deleted: list[str],
-  parent_step_id: str,
-  notes: str = ""          # optional free-text annotation
-) -> dict
+append_trace(session_id, type, reason, files_read, files_modified,
+             files_created, files_deleted, parent_step_id, notes="") -> dict
+# -> {"step_id": "step_003"}
 ```
 
-**Returns:**
+- Resolves the trace path from `session_id`; assigns the next `step_id`.
+- Appends the event; increments `tool_call_count`; logs a `model_override` if the model
+  changed. Pass the returned `step_id` as `parent_step_id` next call (`""` for the root).
 
-```json
-{ "step_id": "step_003" }
-```
-
-**Behaviour:**
-
-- Resolves the trace file path from `session_id` by scanning `.cursor/traces/**/<session_id>/` for the most recent JSON file
-- Generates `step_id`: `'step_'` + zero-padded integer, incrementing from last event in file
-- Appends the new event object to the `events` array in the JSON file
-- Auto-increments `cursor_stats.tool_call_count` in the session header on every call
-- Returns the new `step_id` so the agent can pass it as `parent_step_id` on the next call
-
-**Agent instruction:** Agent must pass the `step_id` returned from each `append_trace` call as `parent_step_id` in the next call. For the very first call, pass `""` as `parent_step_id`. This is what builds the reasoning chain.
-
-### 5.3 end_trace
+### 6.3 end_trace
 
 ```text
-end_trace(
-  session_id: str,
-  outcome: str
-) -> dict
+end_trace(session_id: str, outcome: str) -> dict
+# -> {"trace_file_path": "...", "tokens_in": 15000, "tokens_out": 4200}
 ```
 
-**Returns:**
+- Writes `ended_at` + `outcome` (`completed` | `partial` | `aborted`; else `ValueError`).
+- Auto-reads token counts from Cursor's DB for this `composer_id` (assistant turns at/after
+  `started_at`). Model/tokens are **not** parameters — reading Cursor's ground truth makes
+  agentic debt measurable rather than self-reported.
 
-```json
-{
-  "trace_file_path": ".cursor/traces/20260509/a1b2c3d4/143201_refactor_auth_clients.json",
-  "tokens_in": 15000,
-  "tokens_out": 4200
-}
-```
+### 6.4 cursor_db.py — usage auto-capture
 
-**Behaviour:**
-
-- Resolves trace file path from `session_id`
-- Writes `ended_at` (ISO timestamp) and `outcome` to the session header block
-- Outcome values: `completed`, `partial`, `aborted` — raises `ValueError` for any other value
-- Auto-reads token counts from Cursor's local SQLite DB for this session's `composer_id` (assistant turns created at or after `started_at`) and writes `tokens_in` / `tokens_out`. If no `composer_id` was captured at `start_trace`, both stay null.
-- Returns the final trace file path plus the captured token counts
-
-> Model and token counts are **not** parameters — they are captured from Cursor's own database (see §5.4). This is deliberate: self-reported usage stats are unreliable; reading Cursor's ground truth makes agentic debt measurable rather than estimated.
-
-### 5.4 cursor_db.py — Cursor usage auto-capture
-
-`src/cursor_db.py` reads Cursor IDE's local SQLite database (`state.vscdb`) read-only to populate `cursor_stats` without the agent self-reporting anything:
-
-- `get_active_composer()` — returns the most recently active composer session's `composer_id` and `model` (used by `start_trace`)
-- `get_model_for_composer(composer_id)` — current model for a composer, used by `append_trace` to detect and log mid-session model switches (`model_override` on the event)
-- `get_token_counts(composer_id, since_iso)` — sums `inputTokens` / `outputTokens` across assistant turns created at or after the session start (used by `end_trace`)
-
-All three degrade gracefully: if the DB is missing (no Cursor installed, or non-supported OS) they return `None` / zero counts and the trace is still valid. The DB path is resolved per platform (macOS / Linux / Windows).
+`src/cursor_db.py` reads Cursor's local SQLite DB (`state.vscdb`) read-only:
+`get_active_composer()` (id + model), `get_model_for_composer()` (mid-session switch
+detection), `get_token_counts()` (input/output sums). The DB path resolves per platform
+(macOS / Linux / Windows, override via `CURSOR_DB_PATH`); all three degrade gracefully to
+`None` / zero when Cursor isn't present, so the trace stays valid off-Cursor.
 
 ---
 
-## 6. Cursor Rule
+## 7. Adversarial review → ADR (the plan)
 
-**File location:** `.cursor/rules/session_trace.mdc`
+### 7.1 review-council
 
-### 6.1 Frontmatter
+A Cursor command, `/design-review` (`.cursor/commands/design-review.md`), runs a council
+of 3–6 **independent expert personas** (`.cursor/review-council/standard-personas/`) that
+review a scope in isolation, debate, and converge on a verdict, with the human as an
+active participant. Every council must include at least one of `staff-engineer`,
+`cloud-cost-architect`, `appsec-architect`.
 
-```text
----
-description: Agentic session traceability. Apply during any multi-file or architectural change task.
-alwaysApply: false
----
-```
+Phases: scope + human brief → domain fingerprint → persona selection → independent review
+→ debate → human input → synthesis → **record transcript** (`docs/design-review.md`) →
+**distil ADR** (`docs/adr/`).
 
-### 6.2 Rule Body
+### 7.2 The ADR is formulated *through* the review
 
-At the start of any task involving more than 2 files or any architectural change:
+The transcript in `docs/design-review.md` is the *argument*; the **ADR is the distilled
+decision**. Phase 8 copies `docs/adr/TEMPLATE.md` → `docs/adr/ADR-NNNN-<slug>.md` and
+fills: Context, Decision, **Scope (files)** (a machine contract — see §8), Alternatives,
+Consequences (trade-offs + council-flagged risks), and the Verdict. Only written when the
+verdict is `Proceed as-is` or `Proceed with modifications`.
 
-1. Call `start_trace` with the full task description and the list of files you expect to touch. Store the returned `session_id` and `trace_file_path` — you will need them for every subsequent call.
+### 7.3 The link
 
-2. Before each significant decision — reading a file to understand structure, choosing an implementation approach, modifying a file that other files depend on — call `append_trace`. The `reason` field must be specific. Not "modified auth.py" but "modified auth.py to replace APIKeyAuth with BearerTokenAuth because downstream clients expect a `.headers` property that the old class does not expose."
-
-3. Pass the `step_id` returned from each `append_trace` call as `parent_step_id` in the next call. For the very first call, pass `""`. This is what builds the reasoning chain.
-
-4. When the task is complete or you are stopping, call `end_trace` with:
-   - `outcome` set to `completed`, `partial`, or `aborted`
-   - Do NOT pass model or token counts — they are auto-captured from Cursor's local SQLite DB.
-
-Do not call `append_trace` for trivial actions like reading a config file to check syntax. Call it when you are making a decision that affects other files or that a reviewer would want to understand three weeks from now.
-
----
-
-## 7. FastAPI Server
-
-The MCP tools are served via a FastAPI application (`src/app.py`) that mounts the FastMCP server. Cursor connects to this server over HTTP.
-
-### 7.1 Endpoints
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/health` | GET | Health check — returns `{"status": "ok"}` |
-| `/sessions` | GET | Lists all recorded sessions from `.cursor/traces/` as JSON |
-| `/docs` | GET | FastAPI auto-generated Swagger UI |
-| `/mcp` | `*` | MCP streamable HTTP transport — primary Cursor connection point (Cursor 0.43+) |
-| `/sse` | GET | MCP SSE transport — fallback for older Cursor versions |
-| `/messages/` | POST | MCP SSE message handler (used by SSE transport) |
-
-### 7.2 Transport Notes
-
-- **Streamable HTTP** (`/mcp`): recommended. Cursor 0.43+. Config: `"url": "http://127.0.0.1:8080/mcp"`
-- **SSE** (`/sse`): fallback for older clients. Config: `"url": "http://127.0.0.1:8080/sse"`
-- Routes (`/health`, `/sessions`) must be registered **before** `app.mount("/", sse_app)` because Starlette evaluates routes in registration order and `Mount("/")` is a catch-all.
-
-### 7.3 Cursor Registration
-
-Cursor reads `.cursor/mcp.json` automatically when the project is opened. The file is committed to the repo:
-
-```json
-{
-  "mcpServers": {
-    "cursor-session-tracer": {
-      "url": "http://127.0.0.1:8080/mcp"
-    }
-  }
-}
-```
+Implementation passes the ADR id to the tracer: `start_trace(..., adr_id="ADR-0001")`.
+The trace declares which plan it executes; `render_trace.py` shows it; `/sessions` carries
+it; `audit_trace.py` uses it.
 
 ---
 
-## 8. Terminal Renderer
+## 8. audit_trace.py — the plan-vs-path check
 
-### 7.1 Invocation
+The deterministic "independent reviewer." It parses the ADR's `## Scope (files)` list,
+gathers the files the trace actually touched, and reports:
+
+- **Implemented in scope** — planned ∩ changed
+- **Planned but not touched** — planned − changed
+- **LLD drift** — changed − planned (files changed the ADR never scoped ← the key signal)
+- **Reads outside scope** — informational, not drift
 
 ```bash
-python render_trace.py --session <date>/<session_id>
-# example
-python render_trace.py --session 20260509/a1b2c3d4
+python audit_trace.py --session 20260509/a1b2c3d4          # resolves ADR from the trace's adr_id
+python audit_trace.py --session 20260509/a1b2c3d4 --json   # PR comment / CI gate (exit 1 on drift)
 ```
 
-### 7.2 Behaviour
-
-- Scans `.cursor/traces/<date>/<session_id>/` for all JSON files
-- If multiple files exist (restart scenario), renders each one in chronological order with a visible separator between them
-- Reconstructs the parent-child tree from `parent_step_id` references
-- Walks the tree and prints an indented text tree to stdout
-
-### 7.3 Output Format
-
-```text
-SESSION a1b2c3d4 | refactor_auth_clients | started 14:32:01 | completed 15:14:32
-
-step_001 [decision]  14:32:18
-  reason: auth.py uses APIKeyAuth. Rewriting to BearerTokenAuth requires
-          changing header construction in all downstream clients.
-  read:     src/auth.py
-  modified: (none)
-
-  step_002 [file_modify]  14:33:45
-    reason: Replacing APIKeyAuth class with BearerTokenAuth. .headers
-            property now returns Authorization: Bearer <token>.
-    read:     src/auth.py
-    modified: src/auth.py
-
-    step_003 [file_modify]  14:35:02
-      reason: github.py client imports APIKeyAuth directly. Updating
-              import and instantiation to use BearerTokenAuth.
-      read:     src/clients/github.py
-      modified: src/clients/github.py
-```
-
-### 7.4 Orphan Node Handling
-
-If an event references a `parent_step_id` that does not exist in the file (agent skipped a call), attach the orphaned node to the session root and prefix its label with `[ORPHAN]` in the terminal output. Do not crash. Do not silently discard.
-
-### 8.5 Flags
-
-| Flag | Description |
-|---|---|
-| `--verbose` | Print full reason text without truncation (default: truncated at 120 chars) |
-| `--files-only` | Print only file touch summary, omit reason text. Useful for quick diff review. |
-| `--mode mermaid` | Output a Mermaid flowchart instead of a terminal tree. Saved to `diagram.mermaid` in the session directory. |
-| `--max-nodes N` | Cap Mermaid diagram at N nodes. Appends a truncation note. Use for sessions with 20+ events. |
+Exit code: `0` faithful, `1` drift — so it drops straight into a CI gate. This supplies
+the ground-truth planned-vs-actual diff; an agentic reviewer can layer *semantic*
+faithfulness judgement on top (§12).
 
 ---
 
-## 9. Build Order
+## 9. Cursor integration
 
-**Step 1: JSON schema and file writer utility**
-Write the file path resolver, slug generator, and the read/write/append utilities as standalone functions before touching MCP. Everything depends on these being correct. Test them with a hardcoded input before moving on.
+- **`.cursor/mcp.json`** — committed; auto-registers the tracer (`/mcp` streamable HTTP,
+  Cursor 0.43+; `/sse` fallback for older).
+- **`.cursor/rules/session_trace.mdc`** — tells the agent when to trace (any multi-file or
+  architectural task) and to pass `adr_id` when an ADR exists.
+- **`.cursor/commands/design-review.md`** — the `/design-review` command; personas in
+  `.cursor/review-council/`.
 
-**Step 2: MCP server with three tools**
-Use FastMCP to cut boilerplate. Implement `start_trace`, `append_trace`, `end_trace` in that order. Wire each one to the file utilities from step 1. Test each tool in isolation with a Python test script that calls the functions directly -- do not test through Cursor until all three are working.
-
-**Step 3: FastAPI server**
-Mount the FastMCP server onto a FastAPI app (`src/app.py`). Expose `/health` and `/sessions` routes. Register MCP streamable HTTP at `/mcp` and SSE fallback at `/`. Commit `.cursor/mcp.json` to the repo.
-
-**Step 4: Cursor rule file**
-Write `.cursor/rules/session_trace.mdc` with the frontmatter and rule body from section 6. Test that Cursor picks it up by opening a new chat and checking the rule appears in context.
-
-**Step 5: End-to-end test run on demo repo**
-Use the bundled FastAPI demo app (`demo/`), which has a clear architectural seam: GitHub and Stripe API clients using `APIKeyAuth`. Give the agent a real multi-file refactoring task. Watch the JSON file populate in real time. Check: are the `parent_step_id` chains forming correctly? Is the `reason` field specific or generic? Fix schema gaps before building the renderer.
-
-**Step 6: Terminal renderer**
-Implement `render_trace.py` with the tree walk, truncation, orphan handling, and all flags. Test against the JSON file generated in step 5.
-
-**Step 7: Mermaid renderer**
-Add `--mode mermaid` to `render_trace.py`. Handle orphan attachment, label truncation, and the `--max-nodes` cap. *(Implemented — not a stretch goal.)*
-
-**Step 8: Talk structure and framing slides**
-See the [talk deck](https://docs.google.com/presentation/d/1OHTfj5cgA0UYj3bDyaxZVCk4pLTQC_4x/edit?usp=sharing).
-
-- Slide 1: The failure scenario -- text only, large font, one sentence
-- Slide 2: The four question types -- git history / step debugger / unit test / agentic trace -- as a simple two-column comparison
-- Slide 3: The data model -- session > events > files, with parent_step_id arrows
-- Slide 4: The org-level vision -- JSON today, graph DB at scale, what questions it enables
+**Install into another repo:** copy the `.cursor/` folder (`mcp.json`, `rules/`,
+`commands/`, `review-council/`) and `docs/adr/TEMPLATE.md`, then point that repo's
+`.cursor/mcp.json` at your running tracer.
 
 ---
 
-## 10. Mermaid Renderer
+## 10. Server & renderers
 
-Implemented as `--mode mermaid` on `render_trace.py`. Not a stretch goal — shipped as part of the core implementation.
-
-```bash
-python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid
-python render_trace.py --session 20260509/a1b2c3d4 --mode mermaid --max-nodes 20
-```
-
-### 10.1 Implemented Behaviour
-
-- Outputs a Mermaid `flowchart TD` diagram saved to `diagram.mermaid` in the session directory (PR-attachment ready)
-- In restart scenarios (multiple JSON files under same session_id), merges all events before rendering
-- Different Mermaid node shapes per event type: `decision` → quoted rectangle, `tool_call` → double-braces, `checkpoint` → stadium, etc.
-
-### 10.2 Edge Cases Handled
-
-- **Orphan nodes:** attached to the root `ROOT` node rather than floating disconnected
-- **Label length:** reason truncated to 50 chars; `"` → `'`, `[`/`]` → `(`/`)` to prevent Mermaid parse errors
-- **Large sessions:** `--max-nodes N` caps node count and appends a `TRUNCATED` node
-
-### 10.3 Primary Value
-
-PR attachment, not a debugging tool. Audience is the code reviewer, not the incident responder.
+- **FastAPI server** (`src/app.py`) mounts FastMCP. Routes `/health`, `/sessions` (both
+  carry `adr_id`), `/docs`; MCP at `/mcp` and `/sse`. App routes register **before**
+  `app.mount("/", …)` because Starlette evaluates in registration order and `Mount("/")`
+  is a catch-all.
+- **Terminal renderer** (`render_trace.py`) — reconstructs the parent-child tree, shows the
+  `implements: ADR-…` link, handles orphans (`[ORPHAN]`, never crashes). Flags:
+  `--verbose`, `--files-only`, `--mode mermaid`, `--max-nodes N`.
+- **Mermaid renderer** (`--mode mermaid`) — `flowchart TD` to `diagram.mermaid`, per-type
+  node shapes, merges restart files, escapes labels. Primary value: PR attachment.
 
 ---
 
-## 11. Future Architecture Notes
+## 11. The demo scenario
 
-### 11.1 GraphDB Migration Path
+A naive **checkout service** (`demo/`) with a deliberate, dangerous flaw. `POST /checkout`
+charges via Stripe then writes a receipt via GitHub, every call unguarded:
 
-The JSON schema is deliberately graph-shaped. Migrating to Neo4j requires:
+- **Not idempotent** — retry a timed-out checkout and the customer is **charged twice**.
+- **No retry/backoff** — a transient 5xx surfaces as a hard failure.
+- **No circuit breaker** — a Stripe outage cascades.
 
-- A one-time ingestion script that reads all session JSON files and writes nodes and edges
-- A Cypher schema: `(Step)-[:CAUSED]->(Step)`, `(Step)-[:TOUCHED]->(File)`
-- A query layer for cross-session analysis
+That's a decision worth reviewing, not just coding. The demo walks the full loop:
 
-### 11.2 Agentic Debt as a Metric
+1. **Plan** — `/design-review` on the checkout flow. The council surfaces a **blocker**
+   (retries before idempotency = automatic double-charge) and a **converged concern**
+   (backoff without jitter + no breaker = retry storm), plus a rejected alternative and a
+   recorded human override deferring distributed breaker state to ADR-0002. → `docs/adr/
+   ADR-0001-resilient-idempotent-checkout.md` (transcript in `docs/design-review.md`).
+2. **Path** — implement with `start_trace(..., adr_id="ADR-0001")`; watch the trace form.
+3. **Check** — `audit_trace.py` confirms the implementation stayed in scope, or flags drift.
 
-Once trace data accumulates across an engineering team, agentic debt becomes measurable: sessions where the agent completed the task but the reasoning chain contains orphaned decisions, skipped checkpoints, or decisions that touched files not in the original scope. Leading indicator of future maintenance cost.
+`tests/test_demo.py` is a **canary**: it asserts the naive starting state and fails loudly
+if `demo/` is accidentally left in the post-implementation state before a talk. A committed
+sample trace (`.cursor/traces/20260509/a1b2c3d4/`) renders and audits FAITHFUL out of the box.
 
-### 11.3 Integration Points
+---
 
-- CI pipeline: attach the trace file to the PR automatically as a comment
-- Code review tooling: surface the decision chain inline next to the diff
-- Incident response runbook: add "pull trace file for relevant sessions" as a step alongside git bisect
+## 12. Roadmap / future scope
+
+Framed for a newcomer: here is where the project is and where it goes next.
+
+- **Pluggable graph/analytics trace store (the next logical step).** The schema is
+  deliberately graph-shaped (§5.4). A `TraceStore` interface with a flat-file default and
+  pluggable backends lets traces flow into **Neo4j** (reasoning-graph queries:
+  `(Step)-[:CAUSED]->(Step)`, `(Step)-[:TOUCHED]->(File)`; "which decision patterns precede
+  prod failures") or **ClickHouse** (columnar analytics across thousands of sessions:
+  agentic-debt trends, drift rates per team). **This is the highest-value contribution
+  area** — open an issue to coordinate.
+- **Per-session cost capture.** Cursor's DB gives token counts but not dollar cost; deriving
+  `cost_usd` needs a maintained `model → price` map. Dropped for now to avoid a stale price
+  table — contributions welcome to add an opt-in pricing map.
+- **CI integration.** Wire `audit_trace.py --json` into a PR check that comments the
+  plan-vs-path report and gates on LLD drift.
+- **Agentic reviewer.** `audit_trace.py` supplies the ground-truth file diff; layer an agent
+  that judges *semantic* faithfulness — did the change honour the ADR's intent, not just its
+  file list.
+- **Agentic debt as a metric.** Once traces accumulate: sessions with orphaned decisions,
+  skipped checkpoints, or out-of-scope touches are leading indicators of maintenance cost.
+
+---
+
+## 13. Setup & tooling
+
+- **Python 3.12** (reference: `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3`
+  on macOS). Validated on 3.12.3.
+- **Makefile:** `make setup` (venv + deps), `make test`, `make server`, `make audit
+  SESSION=…`. macOS override: `make setup PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3`.
+- **Dependencies** pinned in `requirements.txt`; `make setup` builds an isolated `.venv`.
+- **Tests** (`pytest`, Python 3.12) cover file utils, all three MCP tools (incl. `adr_id`),
+  the cross-platform Cursor-DB reader, both renderers, the plan-vs-path audit, and the demo
+  canary.

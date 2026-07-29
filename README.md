@@ -238,7 +238,14 @@ Validated on **Python 3.12**. Coverage spans the file utilities, all three MCP t
 
 ## Roadmap / future scope
 
-Contributions welcome — these are the highest-value areas:
+**Where this is today:** a working, local, single-developer system. The trace, the ADR
+pipeline (`/design-review`), and the plan-vs-path audit all run on your machine against a
+flat-file trace store — no server infrastructure, no account, no external dependencies.
+That's deliberate: it has to work in one repo on one laptop before it works at org scale.
+
+**Where it goes next** is turning that single-developer loop into a team-scale one — a
+shared trace store you can query across sessions, and a CI gate that enforces plan-vs-path
+on every PR. Those are the items below, and they're where contributions go furthest:
 
 - **Pluggable graph/analytics trace store (the next logical step).** The JSON schema is deliberately graph-shaped: every event is a node, `parent_step_id` is a directed edge, each file reference is an edge to a file node. The natural evolution is a **pluggable backend** so traces flow into:
   - **Neo4j** — reasoning-graph queries: `(Step)-[:CAUSED]->(Step)`, `(Step)-[:TOUCHED]->(File)`; "which decision patterns precede prod failures", "which files do agents touch most across sessions".
