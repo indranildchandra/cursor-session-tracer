@@ -201,27 +201,65 @@ def test_render_mermaid_arrows(sample_data):
     assert "-->" in output
 
 
+def test_render_mermaid_decision_node_single_quoted(sample_data):
+    """Regression: decision nodes must be ["…"] not [""…""] (malformed Mermaid)."""
+    output = render_mermaid(sample_data)  # step_001 is a decision
+    assert 'step001[""' not in output
+    assert 'step001["' in output
+
+
 # ---------------------------------------------------------------------------
-# render_trace.py CLI (smoke test via subprocess)
+# render_trace.py CLI (in-process, via click's CliRunner)
 # ---------------------------------------------------------------------------
 
-def test_cli_renders_without_crash(tmp_path, sample_data, monkeypatch):
-    """Integration: write trace files, verify CLI doesn't crash."""
-    import subprocess, sys
+import render_trace as rt
+from click.testing import CliRunner
 
-    traces_dir = tmp_path / ".cursor" / "traces" / "20260509" / "a1b2c3d4"
-    traces_dir.mkdir(parents=True)
-    trace_file = traces_dir / "143201_refactor_auth_clients.json"
-    trace_file.write_text(json.dumps(sample_data))
 
-    result = subprocess.run(
-        [sys.executable, "render_trace.py", "--session", "20260509/a1b2c3d4"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-    )
-    # CLI will fail to find TRACES_ROOT in tmp_path unless we copy render_trace.py there
-    # We test the tree logic directly; subprocess test is best-effort
-    # Just verify no import errors
-    assert "ModuleNotFoundError" not in result.stderr
-    assert "SyntaxError" not in result.stderr
+def _write_session(tmp_path, monkeypatch, data, filename="143201_x.json"):
+    """Point TRACES_ROOT at a tmp dir holding one session, return its --session arg."""
+    root = tmp_path / ".cursor" / "traces"
+    sess_dir = root / "20260509" / "a1b2c3d4"
+    sess_dir.mkdir(parents=True)
+    (sess_dir / filename).write_text(json.dumps(data))
+    monkeypatch.setattr(rt, "TRACES_ROOT", root)
+    return "20260509/a1b2c3d4"
+
+
+def test_cli_terminal_mode_ok(tmp_path, sample_data, monkeypatch):
+    session = _write_session(tmp_path, monkeypatch, sample_data)
+    result = CliRunner().invoke(rt.main, ["--session", session])
+    assert result.exit_code == 0, result.output
+    assert "SESSION a1b2c3d4" in result.output
+
+
+def test_cli_mermaid_mode_does_not_crash(tmp_path, monkeypatch):
+    """Regression: Mermaid node shapes ([/…/], ["…"]) must not be parsed as Rich markup."""
+    data = {
+        "session": {
+            "session_id": "a1b2c3d4", "slug": "s", "task": "t",
+            "started_at": "2026-05-09T14:32:01Z", "ended_at": None, "outcome": None,
+            "repo_snapshot": [], "cursor_stats": {},
+        },
+        "events": [
+            {"step_id": "step_001", "parent_step_id": None, "type": "file_create",
+             "timestamp": "2026-05-09T14:32:18Z", "reason": "Create demo/resilience.py transport",
+             "files_read": [], "files_modified": [], "files_created": ["demo/resilience.py"],
+             "files_deleted": [], "notes": ""},
+        ],
+    }
+    session = _write_session(tmp_path, monkeypatch, data)
+    result = CliRunner().invoke(rt.main, ["--session", session, "--mode", "mermaid"])
+    assert result.exit_code == 0, result.output
+    assert "flowchart TD" in result.output
+    assert (tmp_path / ".cursor" / "traces" / "20260509" / "a1b2c3d4" / "diagram.mermaid").exists()
+
+
+def test_cli_terminal_handles_brackets_in_task(tmp_path, sample_data, monkeypatch):
+    """Free-text task with [brackets] must not break Rich markup parsing."""
+    data = json.loads(json.dumps(sample_data))
+    data["session"]["task"] = "Refactor [auth] and fix [BUG-123] in the flow"
+    session = _write_session(tmp_path, monkeypatch, data)
+    result = CliRunner().invoke(rt.main, ["--session", session])
+    assert result.exit_code == 0, result.output
+    assert "BUG-123" in result.output

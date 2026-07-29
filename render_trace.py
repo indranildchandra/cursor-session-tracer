@@ -15,6 +15,7 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.markup import escape
 from rich.text import Text
 from rich.tree import Tree
 
@@ -77,11 +78,11 @@ def render_terminal(data: dict, verbose: bool, files_only: bool, file_label: str
         header += f" {sess['ended_at']}"
 
     console.print()
-    console.rule(f"[bold cyan]{file_label}[/bold cyan]")
-    console.print(f"[bold]{header}[/bold]")
+    console.rule(f"[bold cyan]{escape(file_label)}[/bold cyan]")
+    console.print(f"[bold]{escape(header)}[/bold]")
 
     if sess.get("adr_id"):
-        console.print(f"[bold magenta]implements: {sess['adr_id']}[/bold magenta]  [dim](plan → path)[/dim]")
+        console.print(f"[bold magenta]implements: {escape(str(sess['adr_id']))}[/bold magenta]  [dim](plan → path)[/dim]")
 
     stats = sess.get("cursor_stats", {})
     if any(v is not None for v in stats.values()):
@@ -98,7 +99,7 @@ def render_terminal(data: dict, verbose: bool, files_only: bool, file_label: str
             parts.append(f"cost_usd=${stats['cost_usd']:.4f}")
         console.print(f"[dim]cursor_stats: {' | '.join(parts)}[/dim]")
 
-    console.print(f"[dim]task: {sess['task']}[/dim]")
+    console.print(f"[dim]task: {escape(str(sess['task']))}[/dim]")
     console.print()
 
     if not events:
@@ -193,8 +194,10 @@ def render_mermaid(data: dict, max_nodes: int = 0) -> str:
         label = _escape_mermaid(event.get("reason") or event["type"])
         etype = event["type"]
 
+        # Delimiters wrap the quoted label below (f'…"{label}"…'), so they must NOT
+        # include their own quotes — "decision" once did, producing malformed [""…""].
         shape_open, shape_close = {
-            "decision": ('["', '"]'),
+            "decision": ("[", "]"),
             "file_modify": ("(", ")"),
             "file_create": ("[/", "/]"),
             "file_delete": ("[\\", "\\]"),
@@ -261,8 +264,10 @@ def main(session: str, verbose: bool, files_only: bool, mode: str, max_nodes: in
         mermaid_str = render_mermaid(merged_data, max_nodes=max_nodes)
         out_path = session_dir / "diagram.mermaid"
         out_path.write_text(mermaid_str + "\n")
-        console.print(mermaid_str)
-        console.print(f"\n[dim]Saved to: {out_path}[/dim]")
+        # markup=False: the Mermaid node syntax (["…"], [/…/], [\…\]) contains square
+        # brackets that Rich would otherwise try to parse as console-markup tags.
+        console.print(mermaid_str, markup=False, highlight=False)
+        console.print(f"\n[dim]Saved to: {escape(str(out_path))}[/dim]")
     else:
         for i, jf in enumerate(json_files):
             with open(jf) as f:

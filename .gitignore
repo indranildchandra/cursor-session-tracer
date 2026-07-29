@@ -125,9 +125,10 @@ docs/*
 !docs/design-review.md
 **/__pycache__/
 **.pyc
-DESIGN-PLAN.md
 
 # Runtime-generated traces are ignored; the committed sample under 20260509/ ships as an example
 .cursor/traces/*
 !.cursor/traces/20260509/
+# diagram.mermaid is a generated render artifact — never commit it
+diagram.mermaid
 
