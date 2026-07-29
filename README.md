@@ -177,7 +177,7 @@ Event types: `decision` · `file_read` · `file_modify` · `file_create` · `fil
 
 **2. Tracing rule.** `.cursor/rules/session_trace.mdc` tells the agent when to call the tools (any multi-file or architectural task). It's active automatically.
 
-**3. Adversarial review command.** `.cursor/commands/design-review.md` is the `/design-review` command; the expert personas live in `.cursor/review-council/`. Type `/design-review` in the agent chat to run the council and produce an ADR. See [`.cursor/review-council/README.md`](.cursor/review-council/README.md).
+**3. Adversarial review command** *(requires Cursor 1.6+ — custom commands)*. `.cursor/commands/design-review.md` is the `/design-review` command; Cursor discovers any Markdown file in `.cursor/commands/` and lists it when you type `/` in the agent chat. The 20+ expert personas live in `.cursor/review-council/` (deliberately *outside* `commands/`, so they don't show up as commands); the command reads them by path. See [`.cursor/review-council/README.md`](.cursor/review-council/README.md).
 
 **Installing into another repo:** copy `.cursor/` (the `mcp.json`, `rules/`, `commands/`, and `review-council/` folders) and `docs/adr/TEMPLATE.md` into the target project, and point its `.cursor/mcp.json` at your running tracer.
 

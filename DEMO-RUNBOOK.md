@@ -37,7 +37,7 @@ curl http://127.0.0.1:8080/health          # {"status":"ok","service":"cursor-se
 Both live in `.cursor/` and load automatically when the repo is open:
 
 - **Rule:** `.cursor/rules/session_trace.mdc` → appears under **Cursor → Rules**.
-- **Command:** `.cursor/commands/design-review.md` → type `/` in the agent chat and confirm **`design-review`** appears. Its personas are in `.cursor/review-council/`.
+- **Command (Cursor 1.6+):** `.cursor/commands/design-review.md` → type `/` in the agent chat and confirm **`design-review`** appears (Cursor auto-discovers any `.md` in `.cursor/commands/`). Its personas are in `.cursor/review-council/`. If `/design-review` doesn't appear, check **Cursor → Settings** that you're on 1.6+.
 
 > Installing into another repo: copy the whole `.cursor/` folder (`mcp.json`, `rules/`, `commands/`, `review-council/`) and `docs/adr/TEMPLATE.md` into the target project, then point that repo's `.cursor/mcp.json` at your running tracer.
 
